@@ -1,2 +1,4 @@
 backend/.env
 cv-service/__pycache__/app.cpython-311.pyc
+cv-service/__pycache__
+cv-service/__pycache__/.venv/Lib

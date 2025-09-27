@@ -9,7 +9,14 @@ const API = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:4000";
 const AZURE_KEY = process.env.NEXT_PUBLIC_AZURE_SPEECH_KEY;
 const AZURE_REGION = process.env.NEXT_PUBLIC_AZURE_SPEECH_REGION;
 
-/** ---------- helpers ---------- */
+/** ---------- types & helpers ---------- */
+type Detection = {
+  track_id: number;
+  bbox: [number, number, number, number]; // [x,y,w,h] in SEND space
+  name: string;
+  conf: number;
+};
+
 function speak(text: string) {
   if (AZURE_KEY && AZURE_REGION) {
     const cfg = sdk.SpeechConfig.fromSubscription(AZURE_KEY, AZURE_REGION);
@@ -30,17 +37,54 @@ function speak(text: string) {
   }
 }
 
-function majorityStable(values: string[], n = 3) {
-  if (values.length < n) return null;
-  const recent = values.slice(-n);
-  return recent.every((v) => v === recent[0]) ? recent[0] : null;
+// scale (sendW/sendH -> canvas W/H)
+function scaleBBox(
+  [x, y, w, h]: number[],
+  W: number,
+  H: number,
+  sendW: number,
+  sendH: number
+): [number, number, number, number] {
+  const sx = W / sendW,
+    sy = H / sendH;
+  return [x * sx, y * sy, w * sx, h * sy];
+}
+
+// mirror X once because <video> is -scale-x-100
+function mirrorBBox(
+  [x, y, w, h]: number[],
+  W: number
+): [number, number, number, number] {
+  const xMir = W - (x + w);
+  return [xMir, y, w, h];
 }
 
 /** ---------- page ---------- */
 export default function ARPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
-  const nameHistory = useRef<string[]>([]);
+
+  // offscreen canvas reused for downscaled JPEGs
+  const sendCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // history + state per track for fast, stable labels
+  const trackHistory = useRef<Map<number, string[]>>(new Map());
+  const trackState = useRef<
+    Map<number, { name: string; conf: number; lastSeen: number }>
+  >(new Map());
+
+  // latest-wins request gating
+  const reqCounter = useRef(0);
+  const lastHandledReq = useRef(0);
+
+  // cooldowns for TTS
+  const lastSpeakAt = useRef(0);
+  const lastNameShown = useRef<string>("Unknown");
+
+  // tuning knobs
+  const ACCEPT_CONF = 0.62; // show immediately when >= this confidence
+  const HOLD_MS = 500; // keep last name briefly when it flickers to Unknown
+  const MAJ_WIN = 2; // 2-frame majority for quick lock
 
   const [status, setStatus] = useState("boot");
   const [currentName, setCurrentName] = useState("Unknown");
@@ -64,14 +108,14 @@ export default function ARPage() {
         video.srcObject = stream;
         await video.play();
         setStatus("camera-on");
-        tick();
+        loop();
       } catch (e) {
         console.error("camera error", e);
         setStatus("camera-error");
       }
     };
 
-    const tick = async () => {
+    const loop = async () => {
       if (!running || !videoRef.current) return;
 
       const video = videoRef.current;
@@ -82,100 +126,178 @@ export default function ARPage() {
       const sendW = 320;
       const sendH = Math.round((sendW * vH) / vW);
 
-      // make small frame to send
-      const tmp = document.createElement("canvas");
-      tmp.width = sendW;
-      tmp.height = sendH;
-      const tctx = tmp.getContext("2d")!;
-      tctx.drawImage(video, 0, 0, sendW, sendH);
+      // prepare reusable offscreen canvas
+      if (!sendCanvasRef.current) {
+        sendCanvasRef.current = document.createElement("canvas");
+      }
+      const sendCanvas = sendCanvasRef.current;
+      if (sendCanvas.width !== sendW || sendCanvas.height !== sendH) {
+        sendCanvas.width = sendW;
+        sendCanvas.height = sendH;
+      }
+      const sctx = sendCanvas.getContext("2d")!;
+      sctx.drawImage(video, 0, 0, sendW, sendH);
+
       const blob: Blob = await new Promise((res) =>
-        tmp.toBlob((b) => res(b!), "image/jpeg", 0.85)
+        sendCanvas.toBlob((b) => res(b!), "image/jpeg", 0.45) // lighter + faster
       );
 
       const form = new FormData();
-      form.append("image", blob, "frame.jpg"); // MUST match FastAPI param name
+      form.append("image", blob, "frame.jpg");
+
+      // id this request; latest-wins
+      const myReqId = ++reqCounter.current;
 
       try {
         const r = await fetch(`${CV}/recognize`, { method: "POST", body: form });
         if (!r.ok) {
-          setStatus(`cv-http-${r.status}`);
-          setTimeout(tick, 300);
+          if (myReqId > lastHandledReq.current) {
+            setStatus(`cv-http-${r.status}`);
+            lastHandledReq.current = myReqId;
+          }
+          scheduleNext();
           return;
         }
         const ct = r.headers.get("content-type") || "";
         if (!ct.includes("application/json")) {
-          setStatus("cv-nonjson");
-          setTimeout(tick, 300);
+          if (myReqId > lastHandledReq.current) {
+            setStatus("cv-nonjson");
+            lastHandledReq.current = myReqId;
+          }
+          scheduleNext();
           return;
         }
-        const data = await r.json();
 
-        // ----- draw overlay (scale + mirror aware) -----
+        // ignore stale responses
+        if (myReqId <= lastHandledReq.current) {
+          scheduleNext();
+          return;
+        }
+        lastHandledReq.current = myReqId;
+
+        const data: { detections?: Detection[] } = await r.json();
+        const dets = Array.isArray(data?.detections) ? data.detections : [];
+
+        // prep overlay canvas (resize only when needed)
         const canvas = overlayRef.current!;
-        canvas.width = vW;
-        canvas.height = vH;
+        if (canvas.width !== vW || canvas.height !== vH) {
+          canvas.width = vW;
+          canvas.height = vH;
+        }
         const ctx = canvas.getContext("2d")!;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        if (data?.bbox) {
-          const [x1, y1, x2, y2] = data.bbox as [number, number, number, number];
+        // --- Fast stabilization: early-accept + hysteresis ---
+        const nowMs = performance.now();
 
-          // scale from sendW x sendH to canvas size
-          const scaleX = canvas.width / sendW;
-          const scaleY = canvas.height / sendH;
+        for (const d of dets) {
+          // maintain short history
+          const hist = trackHistory.current.get(d.track_id) ?? [];
+          hist.push(d.name);
+          if (hist.length > MAJ_WIN) hist.shift();
+          trackHistory.current.set(d.track_id, hist);
 
-          const w = (x2 - x1) * scaleX;
-          const h = (y2 - y1) * scaleY;
+          // majority over 2 frames
+          const maj = hist.sort(
+            (a, b) =>
+              hist.filter((x) => x === b).length -
+              hist.filter((x) => x === a).length
+          )[0];
 
-          // video is mirrored (-scale-x-100). Canvas is not.
-          // So mirror X in code:
-          const drawX = canvas.width - (x1 * scaleX + w);
-          const drawY = y1 * scaleY;
+          const prev = trackState.current.get(d.track_id);
+
+          // early accept if confident; else use short majority
+          let show = (d.conf ?? 0) >= ACCEPT_CONF ? d.name : maj;
+
+          // hysteresis: brief Unknown → keep prior name
+          if (
+            show === "Unknown" &&
+            prev &&
+            prev.name !== "Unknown" &&
+            nowMs - prev.lastSeen < HOLD_MS
+          ) {
+            show = prev.name;
+          }
+
+          d.name = show;
+          trackState.current.set(d.track_id, {
+            name: d.name,
+            conf: d.conf ?? 0,
+            lastSeen: nowMs,
+          });
+        }
+
+        // prune stale tracks (housekeeping)
+        for (const [tid, st] of trackState.current) {
+          if (nowMs - st.lastSeen > 2000) {
+            trackState.current.delete(tid);
+            trackHistory.current.delete(tid);
+          }
+        }
+
+        // draw all boxes (scale -> mirror -> draw)
+        for (const d of dets) {
+          let b = scaleBBox(
+            d.bbox,
+            canvas.width,
+            canvas.height,
+            sendW,
+            sendH
+          );
+          b = mirrorBBox(b, canvas.width);
+          const [dx, dy, dw, dh] = b;
 
           ctx.strokeStyle = "cyan";
           ctx.lineWidth = 3;
-          ctx.strokeRect(drawX, drawY, w, h);
+          ctx.strokeRect(dx, dy, dw, dh);
 
-          const label = `${data.name ?? "Unknown"} (${Number(
-            data.confidence || 0
-          ).toFixed(2)})`;
+          const label = `${d.name} (${(d.conf ?? 0).toFixed(2)})`;
           ctx.font = "16px system-ui, sans-serif";
           const pillW = Math.max(180, ctx.measureText(label).width + 16);
           ctx.fillStyle = "rgba(0,128,128,0.9)";
-          ctx.fillRect(drawX, Math.max(0, drawY - 28), pillW, 24);
+          ctx.fillRect(dx, Math.max(0, dy - 28), pillW, 24);
           ctx.fillStyle = "#fff";
-          ctx.fillText(label, drawX + 6, Math.max(16, drawY - 10));
+          ctx.fillText(label, dx + 6, Math.max(16, dy - 10));
         }
 
-        // ----- smoothing + memory fetch -----
-        const name = data?.name || "Unknown";
-        const conf = Number(data?.confidence || 0);
-        nameHistory.current.push(name);
-        if (nameHistory.current.length > 6) nameHistory.current.shift();
+        // choose best non-Unknown for card/TTS (don’t debounce UI; debounce voice)
+        const best = dets
+          .filter((d) => d.name !== "Unknown")
+          .sort((a, b) => (b.conf ?? 0) - (a.conf ?? 0))[0];
 
-        const stable = majorityStable(nameHistory.current, 3);
-        if (stable && stable !== currentName && stable !== "Unknown") {
-          setCurrentName(stable);
-          setConfidence(conf);
+        const speakCooldownMs = 1200;
+
+        if (best && best.name !== lastNameShown.current) {
+          lastNameShown.current = best.name;
           setStatus("recognized");
+          setCurrentName(best.name);
+          setConfidence(best.conf ?? 0);
+
           try {
-            const q = await fetch(`${API}/memories?personId=${encodeURIComponent(stable)}`);
+            const q = await fetch(
+              `${API}/memories?personId=${encodeURIComponent(best.name)}`
+            );
             if (q.ok) {
               const j = await q.json();
-              const cap = j?.item?.caption || `A favorite memory with ${stable}.`;
+              const cap =
+                j?.item?.caption || `A favorite memory with ${best.name}.`;
               setCaption(cap);
-              speak(`This is ${stable}. ${cap}`);
+              if (nowMs - lastSpeakAt.current > speakCooldownMs) {
+                lastSpeakAt.current = nowMs;
+                speak(`This is ${best.name}. ${cap}`);
+              }
             } else {
               setCaption("");
             }
           } catch {
             setCaption("");
           }
-        } else if (stable === "Unknown" && currentName !== "Unknown") {
+        } else if (!best && lastNameShown.current !== "Unknown") {
+          lastNameShown.current = "Unknown";
           setCurrentName("Unknown");
           setCaption("");
           setStatus("searching");
-        } else if (!stable) {
+        } else if (!best) {
           setStatus("searching");
         }
       } catch (err) {
@@ -183,7 +305,12 @@ export default function ARPage() {
         setStatus("cv-unreachable");
       }
 
-      setTimeout(tick, 250); // ~4 fps
+      scheduleNext();
+    };
+
+    const scheduleNext = () => {
+      // ~9 fps perceived; tweak 100–130ms to taste
+      setTimeout(() => running && loop(), 110);
     };
 
     init();
@@ -191,7 +318,7 @@ export default function ARPage() {
       running = false;
       if (stream) stream.getTracks().forEach((t) => t.stop());
     };
-  }, [currentName]);
+  }, []);
 
   return (
     <div className="relative w-full h-screen bg-black">
@@ -203,14 +330,19 @@ export default function ARPage() {
         playsInline
         autoPlay
       />
-      {/* overlay canvas (not mirrored) */}
-      <canvas ref={overlayRef} className="absolute inset-0 w-full h-full" />
+      {/* overlay canvas (transparent, not mirrored) */}
+      <canvas
+        ref={overlayRef}
+        className="absolute inset-0 w-full h-full pointer-events-none"
+      />
 
       {/* status + memory card */}
       <div className="absolute bottom-0 w-full bg-white/90 backdrop-blur p-4">
         <div className="flex items-center justify-between">
           <div className="text-lg font-semibold">
-            {currentName !== "Unknown" ? `This is ${currentName}` : "Looking for a familiar face…"}
+            {currentName !== "Unknown"
+              ? `This is ${currentName}`
+              : "Looking for a familiar face…"}
           </div>
           <div className="text-xs text-gray-500">
             {status.replaceAll("-", " ")}

@@ -1,1 +1,12 @@
 .venv/
+.venv/*
+# Ignore common venv subfolders explicitly (some GUIs show them separately)
+.venv/Lib/
+.venv/Lib/site-packages/
+.venv/Scripts/
+.venv/Include/
+.venv/pyvenv.cfg
+.venv_backup*
+.venv_backup*
+.venv_old*
+.venv/Lib/site-packages/_distutils_hack/
