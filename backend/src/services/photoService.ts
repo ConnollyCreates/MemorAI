@@ -26,7 +26,7 @@ export interface PhotoUploadResult {
 export async function uploadPhotoWithMetadata(data: PhotoUploadData): Promise<PhotoUploadResult> {
     try{
         //Url to where image is stored in Azure Blob Storage
-    const photoUrl = await uploadPhotoAndGetUrl(data.photoBuffer, data.name, data.photoDescription);
+    const photoUrl = await uploadPhotoAndGetUrl(data.photoBuffer, data.name);
     if(!photoUrl){
         return { success: false, error: "Failed to upload photo to Azure" };
     }

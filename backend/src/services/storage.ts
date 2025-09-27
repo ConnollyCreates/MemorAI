@@ -21,7 +21,7 @@ const blobServiceClient = new BlobServiceClient(
     credential
 );
 
-export async function uploadPhotoAndGetUrl(buffer: Buffer, name: string, photoDescription: string): Promise<string> {
+export async function uploadPhotoAndGetUrl(buffer: Buffer, name: string): Promise<string> {
     try{
         //container client to access blobs (photos) in that container, we have 1 container (photos)
         const containerClient = blobServiceClient.getContainerClient(CONTAINER_NAME!);
