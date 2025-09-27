@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 
 // Load environment variables from the correct path
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 // Debug: Check if environment variables are loaded
 console.log('Checking Firebase environment variables:');
@@ -11,47 +11,23 @@ console.log('FIREBASE_PROJECT_ID:', process.env.FIREBASE_PROJECT_ID ? '✓ Set' 
 console.log('FIREBASE_PRIVATE_KEY:', process.env.FIREBASE_PRIVATE_KEY ? '✓ Set' : '✗ Missing');
 console.log('FIREBASE_CLIENT_EMAIL:', process.env.FIREBASE_CLIENT_EMAIL ? '✓ Set' : '✗ Missing');
 
-// Initialize Firebase Admin using environment variables or JSON file
-let serviceAccount;
-
-if (process.env.FIREBASE_PRIVATE_KEY && 
-    process.env.FIREBASE_PROJECT_ID && 
-    process.env.FIREBASE_CLIENT_EMAIL && 
-    process.env.FIREBASE_CLIENT_ID) {
-    // Use environment variables (recommended for production)
-    serviceAccount = {
-        type: "service_account",
-        project_id: process.env.FIREBASE_PROJECT_ID,
-        private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-        private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-        client_email: process.env.FIREBASE_CLIENT_EMAIL,
-        client_id: process.env.FIREBASE_CLIENT_ID,
-        auth_uri: "https://accounts.google.com/o/oauth2/auth",
-        token_uri: "https://oauth2.googleapis.com/token",
-        auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-        client_x509_cert_url: process.env.FIREBASE_CLIENT_X509_CERT_URL
-    };
-} else {
-    // No environment variables found - provide helpful error message
-    console.error('Firebase environment variables not found. Required variables:');
-    console.error('- FIREBASE_PROJECT_ID');
-    console.error('- FIREBASE_PRIVATE_KEY_ID');
-    console.error('- FIREBASE_PRIVATE_KEY');
-    console.error('- FIREBASE_CLIENT_EMAIL');
-    console.error('- FIREBASE_CLIENT_ID');
-    console.error('- FIREBASE_CLIENT_X509_CERT_URL');
-    console.error('');
-    console.error('Please:');
-    console.error('1. Copy .env.example to .env');
-    console.error('2. Download your Firebase service account JSON from Firebase Console');
-    console.error('3. Fill in the .env file with values from the JSON');
-    
-    throw new Error('Firebase credentials not configured. Please set up environment variables in .env file.');
+// Try a simplified Firebase initialization
+try {
+    if (!admin.apps.length) {
+        admin.initializeApp({
+            credential: admin.credential.cert({
+                projectId: process.env.FIREBASE_PROJECT_ID,
+                clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+            }),
+            projectId: process.env.FIREBASE_PROJECT_ID
+        });
+        console.log('✓ Firebase Admin SDK initialized successfully');
+    }
+} catch (error) {
+    console.error('✗ Firebase initialization failed:', error);
+    throw new Error('Failed to initialize Firebase Admin SDK');
 }
-
-admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-});
 
 const db = admin.firestore();
 
