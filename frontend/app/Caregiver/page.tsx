@@ -171,7 +171,11 @@ export default function Caregiver() {
             </button>
             <button 
               onClick={() => setShowPreview(!showPreview)}
-              className="px-10 py-4 border-2 border-white/30 rounded-full text-white font-semibold hover:bg-white/10 transition-all duration-300 text-lg"
+              className={`px-10 py-4 border-2 border-white/30 rounded-full text-white font-semibold hover:bg-white/10 transition-all duration-300 text-lg ${
+                selectedImages.length >= 3 && name && relationship 
+                  ? 'cursor-pointer hover:scale-105' 
+                  : 'cursor-not-allowed opacity-50 hover:scale-100'
+              }`}
               disabled={selectedImages.length < 3 || !name || !relationship}
             >
               {showPreview ? 'Hide Preview' : 'Preview Memory Card'}
