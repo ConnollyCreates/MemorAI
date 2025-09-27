@@ -6,6 +6,10 @@ import { useState } from "react";
 
 export default function Caregiver() {
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [name, setName] = useState<string>("");
+  const [relationship, setRelationship] = useState<string>("");
+  const [activity, setActivity] = useState<string>("");
+  const [showPreview, setShowPreview] = useState<boolean>(false);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>): void => {
     const files: File[] = Array.from(e.target.files ?? []);
@@ -102,11 +106,12 @@ export default function Caregiver() {
                       <img
                         src={imageUrl}
                         alt={`Uploaded image ${index + 1}`}
-                        className="w-full h-32 object-cover rounded-lg border border-white/20"
+                        className="w-full h-32 object-cover rounded-lg border border-white/20 transition-all duration-300 group-hover:brightness-90"
                       />
+                      {/* Enhanced X button - only clickable element */}
                       <button
                         onClick={() => removeImage(index)}
-                        className="absolute -top-2 -right-2 bg-red-500 hover:bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold transition-colors duration-200 opacity-0 group-hover:opacity-100"
+                        className="absolute -top-2 -right-2 bg-red-500 hover:bg-red-600 text-white rounded-full w-8 h-8 flex items-center justify-center text-lg font-bold transition-all duration-200 opacity-0 group-hover:opacity-100 hover:scale-110 shadow-lg z-10 cursor-pointer"
                       >
                         ×
                       </button>
@@ -125,6 +130,8 @@ export default function Caregiver() {
                 <input
                   type="text"
                   placeholder="Enter person's name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
                   className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-cyan-300/50 focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:border-transparent transition-all"
                 />
               </div>
@@ -136,6 +143,8 @@ export default function Caregiver() {
                 <input
                   type="text"
                   placeholder="e.g., Son, Daughter, Friend"
+                  value={relationship}
+                  onChange={(e) => setRelationship(e.target.value)}
                   className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-cyan-300/50 focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:border-transparent transition-all"
                 />
               </div>
@@ -147,6 +156,8 @@ export default function Caregiver() {
                 <input
                   type="text"
                   placeholder="Favorite activities together"
+                  value={activity}
+                  onChange={(e) => setActivity(e.target.value)}
                   className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-cyan-300/50 focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:border-transparent transition-all"
                 />
               </div>
@@ -158,11 +169,88 @@ export default function Caregiver() {
             <button className="px-10 py-4 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full text-white font-semibold hover:from-cyan-400 hover:to-blue-400 transition-all duration-300 transform hover:scale-105 shadow-lg text-lg">
               Save Profile
             </button>
-            <button className="px-10 py-4 border-2 border-white/30 rounded-full text-white font-semibold hover:bg-white/10 transition-all duration-300 text-lg">
-              Preview
+            <button 
+              onClick={() => setShowPreview(!showPreview)}
+              className="px-10 py-4 border-2 border-white/30 rounded-full text-white font-semibold hover:bg-white/10 transition-all duration-300 text-lg"
+              disabled={selectedImages.length < 3 || !name || !relationship}
+            >
+              {showPreview ? 'Hide Preview' : 'Preview Memory Card'}
             </button>
           </div>
+
+          {/* Minimum Photos Warning */}
+          {selectedImages.length < 3 && (
+            <div className="text-center mt-6">
+              <p className="text-yellow-300 text-sm">
+                ⚠️ Please upload at least 3 photos to preview the memory card
+              </p>
+            </div>
+          )}
         </div>
+
+        {/* Memory Card Preview Modal/Section */}
+        {showPreview && selectedImages.length >= 3 && name && relationship && (
+          <div className="max-w-2xl mx-auto mt-16 mb-8">
+            <div className="text-center mb-8">
+              <h2 className="text-3xl font-semibold text-white mb-4">
+                Memory Card Preview
+              </h2>
+              <p className="text-cyan-200">
+                This is how the information will appear during AR recognition
+              </p>
+            </div>
+
+            {/* Memory Card */}
+            <div className="bg-white/15 backdrop-blur-md rounded-3xl shadow-2xl border border-white/30 p-8 max-w-md mx-auto transform hover:scale-105 transition-all duration-300">
+              {/* Most Recent Photo */}
+              <div className="text-center mb-6">
+                <div className="w-48 h-48 mx-auto mb-4 rounded-2xl overflow-hidden border-4 border-cyan-300/50 shadow-lg">
+                  <img 
+                    src={selectedImages[selectedImages.length - 1]} 
+                    alt={name}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                
+                {/* Person Info */}
+                <div className="space-y-3">
+                  <h3 className="text-3xl font-bold text-white">{name}</h3>
+                  <div className="bg-cyan-500/20 rounded-full px-4 py-2 inline-block">
+                    <p className="text-cyan-200 font-semibold capitalize">Your {relationship}</p>
+                  </div>
+                  
+                  {activity && (
+                    <div className="bg-white/10 rounded-xl p-3 mt-4">
+                      <p className="text-sm text-gray-300 font-medium mb-1">Remember:</p>
+                      <p className="text-cyan-100">{activity}</p>
+                    </div>
+                  )}
+                  
+                  {/* Photo Count Indicator */}
+                  <div className="mt-4">
+                    <p className="text-xs text-cyan-300/70">
+                      {selectedImages.length} photo{selectedImages.length > 1 ? 's' : ''} stored
+                    </p>
+                  </div>
+                </div>
+              </div>
+              
+              {/* AR Simulation Effect */}
+              <div className="border-t border-cyan-300/30 pt-4 text-center">
+                <div className="flex items-center justify-center gap-2 text-cyan-300">
+                  <div className="w-2 h-2 bg-cyan-400 rounded-full animate-pulse"></div>
+                  <span className="text-xs font-medium">AR RECOGNITION ACTIVE</span>
+                  <div className="w-2 h-2 bg-cyan-400 rounded-full animate-pulse"></div>
+                </div>
+              </div>
+            </div>
+
+            {/* Additional Info */}
+            <div className="text-center mt-6 text-sm text-cyan-300/80">
+              <p>📸 Showing most recent photo • 🧠 Optimized for memory recognition</p>
+            </div>
+          </div>
+        )}
       </main>
 
       <Footer />
