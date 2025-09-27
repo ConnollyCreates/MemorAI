@@ -1,7 +1,7 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # Firebase credentials
-config/*.json
+config\memorai-66fab-firebase-adminsdk-fbsvc-0461e70293.json
 
 # dependencies
 /node_modules
