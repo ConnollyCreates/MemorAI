@@ -229,7 +229,7 @@ export default function Caregiver() {
               className={`px-10 py-4 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full text-white font-semibold transition-all duration-300 transform shadow-lg text-lg ${
                 isUploading || selectedFiles.length === 0 || !name || !relationship || !activity
                   ? 'opacity-50 cursor-not-allowed'
-                  : 'hover:from-cyan-400 hover:to-blue-400 hover:scale-105'
+                  : 'hover:from-cyan-400 hover:to-blue-400 hover:scale-105 cursor-pointer'
               }`}
             >
               {isUploading ? 'Uploading...' : 'Save Profile'}

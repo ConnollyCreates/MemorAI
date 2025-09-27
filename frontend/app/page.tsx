@@ -18,9 +18,9 @@ export default function Home() {
             AI-powered facial recognition technology helping people with Alzheimer's remember loved ones through real-time AR assistance
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-            <button className="px-8 py-3 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full text-white font-semibold hover:from-cyan-400 hover:to-blue-400 transition-all duration-300 transform hover:scale-105 shadow-lg">
+            <Link href="/ar" className="px-8 py-3 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full text-white font-semibold hover:from-cyan-400 hover:to-blue-400 transition-all duration-300 transform hover:scale-105 shadow-lg inline-block">
               Get Started
-            </button>
+            </Link>
             <Link href="/about" className="px-8 py-3 border-2 border-white/30 rounded-full text-white font-semibold hover:bg-white/10 transition-all duration-300 inline-block">
               Learn More
             </Link>
