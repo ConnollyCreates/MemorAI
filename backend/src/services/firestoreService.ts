@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 
 // Load environment variables from the correct path
-dotenv.config({ path: '/Users/chrisxxc/MemorAI/MemorAI/backend/.env' });
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 // Debug the path resolution
 console.log('Current __dirname:', __dirname);
