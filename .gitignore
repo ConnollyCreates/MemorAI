@@ -4,6 +4,7 @@ backend/src/config/*.json
 
 # Python cache
 cv-service/__pycache__/
+cv-service/__pycache__/app.cpython-311.pyc
 **/__pycache__/
 *.pyc
 *.pyo
