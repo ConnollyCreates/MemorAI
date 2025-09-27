@@ -1,5 +1,6 @@
 import Header from "../components/Header";
 import Footer from "../components/footer";
+import Link from "next/link";
 
 export default function Home() {
   return (
@@ -20,9 +21,9 @@ export default function Home() {
             <button className="px-8 py-3 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full text-white font-semibold hover:from-cyan-400 hover:to-blue-400 transition-all duration-300 transform hover:scale-105 shadow-lg">
               Get Started
             </button>
-            <button className="px-8 py-3 border-2 border-white/30 rounded-full text-white font-semibold hover:bg-white/10 transition-all duration-300">
+            <Link href="/about" className="px-8 py-3 border-2 border-white/30 rounded-full text-white font-semibold hover:bg-white/10 transition-all duration-300 inline-block">
               Learn More
-            </button>
+            </Link>
           </div>
         </div>
       </main>
