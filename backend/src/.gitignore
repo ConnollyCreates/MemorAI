@@ -41,8 +41,10 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# Python
-__pycache__/
-*.pyc
-.venv/
-.env*
+#firestore database stuff hehe
+config/memorai-66fab-firebase-adminsdk-fbsvc-0461e70293.json
+
+# Environment variables (azure blob stuff)
+.env
+.env.local
+.env.production
