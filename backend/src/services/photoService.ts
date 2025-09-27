@@ -34,25 +34,25 @@ export async function uploadPhotoWithMetadata(data: PhotoUploadData): Promise<Ph
             return { success: false, error: "Failed to upload photo to Azure" };
         }
 
-        // Try Firestore save with simplified authentication
-        console.log('Attempting Firestore save with simplified auth...');
+                // Try Firestore save with REST API
+        console.log('🔥 Attempting Firestore save with REST API...');
         try {
             const photoID = await addPhotoEntry(normalizedName, data.relation, data.photoDescription, photoUrl);
-            console.log('✓ Firestore save successful!');
+            console.log('✅ Firestore REST API save successful!');
             return { 
                 success: true, 
                 photoUrl: photoUrl, 
                 firestoreId: photoID
             };
         } catch (firestoreError) {
-            console.log('⚠️ Firestore save failed, but Azure upload succeeded');
-            console.error('Firestore error:', firestoreError);
+            console.log('⚠️ Firestore REST API save failed, but Azure upload succeeded');
+            console.error('Firestore REST API error:', firestoreError);
             // Return success with Azure URL even if Firestore fails
             return { 
                 success: true, 
                 photoUrl: photoUrl, 
-                firestoreId: 'firestore-failed',
-                error: 'Photo saved to Azure but Firestore save failed'
+                firestoreId: 'firestore-rest-failed',
+                error: 'Photo saved to Azure but Firestore REST API save failed'
             };
         }
     }
