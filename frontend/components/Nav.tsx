@@ -2,11 +2,11 @@ import Link from "next/link";
 
 const Nav = () => {
     return (
-        <div className ="w-20">
-        <Link href="/Caregiver" className="hover:text-blue-500 transition-colors">
-            Caregiver
-        </Link>
-        </div>
+        <nav className="flex space-x-6">
+            <Link href="/Caregiver" className="text-white/90 hover:text-cyan-200 transition-colors duration-300 font-medium">
+                Caregiver
+            </Link>
+        </nav>
     );
 };
 
