@@ -6,22 +6,79 @@ import { useState } from "react";
 
 export default function Caregiver() {
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]); // Store actual File objects
   const [name, setName] = useState<string>("");
   const [relationship, setRelationship] = useState<string>("");
   const [activity, setActivity] = useState<string>("");
   const [showPreview, setShowPreview] = useState<boolean>(false);
+  const [isUploading, setIsUploading] = useState<boolean>(false);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>): void => {
     const files: File[] = Array.from(e.target.files ?? []);
     console.log("Selected files:", files);
 
-    // Convert files to URLs and add to selectedImages
+    // Store actual File objects for uploading
+    setSelectedFiles((prev) => [...prev, ...files]);
+
+    // Convert files to URLs for display preview
     const newImageUrls = files.map((file) => URL.createObjectURL(file));
     setSelectedImages((prev) => [...prev, ...newImageUrls]);
   };
 
   const removeImage = (index: number): void => {
     setSelectedImages((prev) => prev.filter((_, i) => i !== index));
+    setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSaveProfile = async (): Promise<void> => {
+    if (selectedFiles.length === 0 || !name || !relationship || !activity) {
+      alert("Please fill in all required fields (name, relationship, activity) and upload at least one photo.");
+      return;
+    }
+
+    setIsUploading(true);
+    
+    try {
+      // Upload each photo with metadata to your backend
+      for (const file of selectedFiles) {
+        // Convert file to FormData for API call
+        const formData = new FormData();
+        formData.append('photo', file);
+        formData.append('name', name);
+        formData.append('relation', relationship);
+        formData.append('photoDescription', activity || "Photo uploaded from caregiver dashboard");
+        
+        // Make API call to your backend
+        const response = await fetch('/api/upload-photo', {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Upload failed');
+        }
+        
+        const result = await response.json();
+        console.log('Photo uploaded successfully:', result);
+      }
+      
+      alert(`Successfully uploaded ${selectedFiles.length} photo(s) for ${name}!`);
+      
+      // Reset form
+      setSelectedImages([]);
+      setSelectedFiles([]);
+      setName("");
+      setRelationship("");
+      setActivity("");
+      setShowPreview(false);
+      
+    } catch (error) {
+      console.error('Upload error:', error);
+      alert('Failed to upload photos. Please try again.');
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   return (
@@ -166,8 +223,16 @@ export default function Caregiver() {
 
           {/* Action Buttons */}
           <div className="flex justify-center gap-6 mt-12">
-            <button className="px-10 py-4 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full text-white font-semibold hover:from-cyan-400 hover:to-blue-400 transition-all duration-300 transform hover:scale-105 shadow-lg text-lg">
-              Save Profile
+            <button 
+              onClick={handleSaveProfile}
+              disabled={isUploading || selectedFiles.length === 0 || !name || !relationship || !activity}
+              className={`px-10 py-4 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full text-white font-semibold transition-all duration-300 transform shadow-lg text-lg ${
+                isUploading || selectedFiles.length === 0 || !name || !relationship || !activity
+                  ? 'opacity-50 cursor-not-allowed'
+                  : 'hover:from-cyan-400 hover:to-blue-400 hover:scale-105'
+              }`}
+            >
+              {isUploading ? 'Uploading...' : 'Save Profile'}
             </button>
             <button 
               onClick={() => setShowPreview(!showPreview)}
