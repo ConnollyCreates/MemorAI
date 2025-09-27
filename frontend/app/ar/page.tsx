@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as sdk from "microsoft-cognitiveservices-speech-sdk";
+import MemoryCardOverlay from "@/components/MemoryCardOverlay";
 
 /** ---------- env & defaults ---------- */
 const CV = process.env.NEXT_PUBLIC_CV_URL || "http://127.0.0.1:8000";
@@ -73,13 +74,44 @@ export default function ARPage() {
     Map<number, { name: string; conf: number; lastSeen: number }>
   >(new Map());
 
+  // EMA for smoother boxes (per track)
+  const smoothBoxes = useRef<
+    Map<number, [number, number, number, number]>
+  >(new Map());
+  const emaBox = (
+    tid: number,
+    box: [number, number, number, number],
+    alpha = 0.35
+  ): [number, number, number, number] => {
+    const prev = smoothBoxes.current.get(tid);
+    if (!prev) {
+      smoothBoxes.current.set(tid, box);
+      return box;
+    }
+    const out: [number, number, number, number] = [
+      prev[0] + alpha * (box[0] - prev[0]),
+      prev[1] + alpha * (box[1] - prev[1]),
+      prev[2] + alpha * (box[2] - prev[2]),
+      prev[3] + alpha * (box[3] - prev[3]),
+    ];
+    smoothBoxes.current.set(tid, out);
+    return out;
+  };
+
   // latest-wins request gating
   const reqCounter = useRef(0);
   const lastHandledReq = useRef(0);
 
-  // cooldowns for TTS
+  // cooldowns for TTS + name change tracking
   const lastSpeakAt = useRef(0);
   const lastNameShown = useRef<string>("Unknown");
+
+  // snap-side card + throttled Y nudge
+  const cardSideRef = useRef<"left" | "right">("right");
+  const cardElRef = useRef<HTMLDivElement | null>(null);
+  const lastCardYUpdate = useRef(0);
+  // New: flip cooldown to avoid rapid toggling
+  const lastFlipAtRef = useRef(0);
 
   // tuning knobs
   const ACCEPT_CONF = 0.62; // show immediately when >= this confidence
@@ -87,9 +119,22 @@ export default function ARPage() {
   const MAJ_WIN = 2; // 2-frame majority for quick lock
 
   const [status, setStatus] = useState("boot");
+  const lastStatusRef = useRef(status);
+  const safeSetStatus = (s: string) => {
+    if (lastStatusRef.current !== s) {
+      lastStatusRef.current = s;
+      setStatus(s);
+    }
+  };
+
   const [currentName, setCurrentName] = useState("Unknown");
   const [confidence, setConfidence] = useState(0);
+
+  // Memory card bits
   const [caption, setCaption] = useState("");
+  const [relationship, setRelationship] = useState<string>("");
+  const [photoUrl, setPhotoUrl] = useState<string | undefined>(undefined);
+  const [photosCount, setPhotosCount] = useState<number | undefined>(undefined);
 
   useEffect(() => {
     let running = true;
@@ -97,7 +142,7 @@ export default function ARPage() {
 
     const init = async () => {
       try {
-        setStatus("requesting-camera");
+        safeSetStatus("requesting-camera");
         stream = await navigator.mediaDevices.getUserMedia({
           video: { width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: false,
@@ -107,11 +152,11 @@ export default function ARPage() {
         const video = videoRef.current!;
         video.srcObject = stream;
         await video.play();
-        setStatus("camera-on");
+        safeSetStatus("camera-on");
         loop();
       } catch (e) {
         console.error("camera error", e);
-        setStatus("camera-error");
+        safeSetStatus("camera-error");
       }
     };
 
@@ -122,8 +167,8 @@ export default function ARPage() {
       const vW = video.videoWidth || 640;
       const vH = video.videoHeight || 480;
 
-      // keep aspect ratio for the downscaled frame
-      const sendW = 320;
+      // keep aspect ratio for the downscaled frame (a touch smaller for perf)
+      const sendW = 288;
       const sendH = Math.round((sendW * vH) / vW);
 
       // prepare reusable offscreen canvas
@@ -139,7 +184,7 @@ export default function ARPage() {
       sctx.drawImage(video, 0, 0, sendW, sendH);
 
       const blob: Blob = await new Promise((res) =>
-        sendCanvas.toBlob((b) => res(b!), "image/jpeg", 0.45) // lighter + faster
+        sendCanvas.toBlob((b) => res(b!), "image/jpeg", 0.4) // smaller + faster
       );
 
       const form = new FormData();
@@ -152,7 +197,7 @@ export default function ARPage() {
         const r = await fetch(`${CV}/recognize`, { method: "POST", body: form });
         if (!r.ok) {
           if (myReqId > lastHandledReq.current) {
-            setStatus(`cv-http-${r.status}`);
+            safeSetStatus(`cv-http-${r.status}`);
             lastHandledReq.current = myReqId;
           }
           scheduleNext();
@@ -161,7 +206,7 @@ export default function ARPage() {
         const ct = r.headers.get("content-type") || "";
         if (!ct.includes("application/json")) {
           if (myReqId > lastHandledReq.current) {
-            setStatus("cv-nonjson");
+            safeSetStatus("cv-nonjson");
             lastHandledReq.current = myReqId;
           }
           scheduleNext();
@@ -232,10 +277,11 @@ export default function ARPage() {
           if (nowMs - st.lastSeen > 2000) {
             trackState.current.delete(tid);
             trackHistory.current.delete(tid);
+            smoothBoxes.current.delete(tid);
           }
         }
 
-        // draw all boxes (scale -> mirror -> draw)
+        // draw all boxes (scale -> mirror -> EMA -> draw)
         for (const d of dets) {
           let b = scaleBBox(
             d.bbox,
@@ -245,6 +291,7 @@ export default function ARPage() {
             sendH
           );
           b = mirrorBBox(b, canvas.width);
+          b = emaBox(d.track_id, b); // smoothing
           const [dx, dy, dw, dh] = b;
 
           ctx.strokeStyle = "cyan";
@@ -260,16 +307,102 @@ export default function ARPage() {
           ctx.fillText(label, dx + 6, Math.max(16, dy - 10));
         }
 
-        // choose best non-Unknown for card/TTS (don’t debounce UI; debounce voice)
+        // choose best non-Unknown for card/TTS
         const best = dets
           .filter((d) => d.name !== "Unknown")
           .sort((a, b) => (b.conf ?? 0) - (a.conf ?? 0))[0];
 
         const speakCooldownMs = 1200;
 
+        // Avoid covering face: flip or nudge card when too close/overlapping
+        if (best) {
+          let bb = scaleBBox(best.bbox, canvas.width, canvas.height, sendW, sendH);
+          bb = mirrorBBox(bb, canvas.width);
+          const [bx, by, bw, bh] = bb;
+
+          const CARD_W = cardElRef.current?.offsetWidth ?? 320;
+          const CARD_H = cardElRef.current?.offsetHeight ?? 260;
+          const PAD = 8; // screen edge padding
+          const SAFE_GAP = 16; // desired gap between face and card
+          const FLIP_COOLDOWN = 700; // ms
+
+          // current card rect based on side and its current top style
+          const side = cardSideRef.current;
+          const topNow = (() => {
+            const y = parseFloat(cardElRef.current?.style.top || "0");
+            if (!isFinite(y)) return Math.max(PAD, Math.min(by + bh / 2 - CARD_H / 2, canvas.height - CARD_H - PAD));
+            return y;
+          })();
+          const leftNow = side === "left" ? PAD : canvas.width - CARD_W - PAD;
+          const cardRect = { x: leftNow, y: topNow, w: CARD_W, h: CARD_H };
+          const faceRect = { x: bx, y: by, w: bw, h: bh };
+
+          const intersects = !(
+            cardRect.x + cardRect.w < faceRect.x - SAFE_GAP ||
+            faceRect.x + faceRect.w < cardRect.x - SAFE_GAP ||
+            cardRect.y + cardRect.h < faceRect.y - SAFE_GAP ||
+            faceRect.y + faceRect.h < cardRect.y - SAFE_GAP
+          );
+
+          // If overlapping/too close, prefer flipping sides if cooldown passed
+          if (intersects && nowMs - lastFlipAtRef.current > FLIP_COOLDOWN) {
+            cardSideRef.current = side === "left" ? "right" : "left";
+            lastFlipAtRef.current = nowMs;
+          }
+
+          // After possible flip, recompute left and small vertical nudge to keep away
+          const newSide = cardSideRef.current;
+          const newLeft = newSide === "left" ? PAD : canvas.width - CARD_W - PAD;
+
+          // Nudge top to above or below the face if still too close vertically
+          const needVerticalNudge =
+            !(cardRect.y + cardRect.h < faceRect.y - SAFE_GAP || faceRect.y + faceRect.h < cardRect.y - SAFE_GAP);
+
+          let targetTop = topNow;
+          if (needVerticalNudge) {
+            // place just above or below depending on space
+            const aboveTop = Math.max(PAD, faceRect.y - CARD_H - SAFE_GAP);
+            const belowTop = Math.min(canvas.height - CARD_H - PAD, faceRect.y + faceRect.h + SAFE_GAP);
+            // choose the side with more space
+            const spaceAbove = faceRect.y - PAD;
+            const spaceBelow = canvas.height - (faceRect.y + faceRect.h) - PAD;
+            targetTop = spaceAbove >= spaceBelow ? aboveTop : belowTop;
+          }
+
+          // Apply DOM writes under throttle
+          if (cardElRef.current) {
+            // update left immediately if side changed
+            cardElRef.current.style.left = newSide === "left" ? `${PAD}px` : "";
+            cardElRef.current.style.right = newSide === "right" ? `${PAD}px` : "";
+
+            if (nowMs - lastCardYUpdate.current > 90) {
+              const clampedTop = Math.max(PAD, Math.min(targetTop, canvas.height - CARD_H - PAD));
+              cardElRef.current.style.top = `${clampedTop}px`;
+              lastCardYUpdate.current = nowMs;
+            }
+          }
+        }
+
+        // existing snap side when person changes remains as a fallback
+        if (best) {
+          let bb = scaleBBox(best.bbox, canvas.width, canvas.height, sendW, sendH);
+          bb = mirrorBBox(bb, canvas.width);
+          const [bx, , bw] = bb;
+          const faceCenterX = bx + bw / 2;
+          if (best.name !== lastNameShown.current) {
+            cardSideRef.current = faceCenterX < canvas.width / 2 ? "right" : "left";
+            // also update styles immediately
+            if (cardElRef.current) {
+              const PAD = 8;
+              cardElRef.current.style.left = cardSideRef.current === "left" ? `${PAD}px` : "";
+              cardElRef.current.style.right = cardSideRef.current === "right" ? `${PAD}px` : "";
+            }
+          }
+        }
+
         if (best && best.name !== lastNameShown.current) {
           lastNameShown.current = best.name;
-          setStatus("recognized");
+          safeSetStatus("recognized");
           setCurrentName(best.name);
           setConfidence(best.conf ?? 0);
 
@@ -279,38 +412,60 @@ export default function ARPage() {
             );
             if (q.ok) {
               const j = await q.json();
+              const item = j?.item || j || {};
+
               const cap =
-                j?.item?.caption || `A favorite memory with ${best.name}.`;
+                item.caption || `A favorite memory with ${best.name}.`;
+              const rel = item.relationship || "";
+              const urls: string[] =
+                item.photoUrls ||
+                item.photos ||
+                (item.photoUrl ? [item.photoUrl] : []) ||
+                [];
+
               setCaption(cap);
+              setRelationship(rel);
+              setPhotoUrl(urls[0]);
+              setPhotosCount(urls.length);
+
               if (nowMs - lastSpeakAt.current > speakCooldownMs) {
                 lastSpeakAt.current = nowMs;
                 speak(`This is ${best.name}. ${cap}`);
               }
             } else {
               setCaption("");
+              setRelationship("");
+              setPhotoUrl(undefined);
+              setPhotosCount(undefined);
             }
           } catch {
             setCaption("");
+            setRelationship("");
+            setPhotoUrl(undefined);
+            setPhotosCount(undefined);
           }
         } else if (!best && lastNameShown.current !== "Unknown") {
           lastNameShown.current = "Unknown";
           setCurrentName("Unknown");
           setCaption("");
-          setStatus("searching");
+          setRelationship("");
+          setPhotoUrl(undefined);
+          setPhotosCount(undefined);
+          safeSetStatus("searching");
         } else if (!best) {
-          setStatus("searching");
+          safeSetStatus("searching");
         }
       } catch (err) {
         console.error("recognize network/CORS error", err);
-        setStatus("cv-unreachable");
+        safeSetStatus("cv-unreachable");
       }
 
       scheduleNext();
     };
 
     const scheduleNext = () => {
-      // ~9 fps perceived; tweak 100–130ms to taste
-      setTimeout(() => running && loop(), 110);
+      // ~8 fps perceived; EMA + fixed card makes it feel smooth
+      setTimeout(() => running && loop(), 125);
     };
 
     init();
@@ -330,27 +485,36 @@ export default function ARPage() {
         playsInline
         autoPlay
       />
+
       {/* overlay canvas (transparent, not mirrored) */}
       <canvas
         ref={overlayRef}
         className="absolute inset-0 w-full h-full pointer-events-none"
       />
 
-      {/* status + memory card */}
-      <div className="absolute bottom-0 w-full bg-white/90 backdrop-blur p-4">
-        <div className="flex items-center justify-between">
-          <div className="text-lg font-semibold">
-            {currentName !== "Unknown"
-              ? `This is ${currentName}`
-              : "Looking for a familiar face…"}
-          </div>
-          <div className="text-xs text-gray-500">
-            {status.replaceAll("-", " ")}
-            {currentName !== "Unknown" ? ` • conf ${confidence.toFixed(2)}` : ""}
-          </div>
+      {/* memory card: fixed to snapped side, Y nudged via style (no re-render) */}
+      {currentName !== "Unknown" && (
+        <div
+          ref={cardElRef}
+          className="absolute z-20"
+          style={{ top: "calc(50% - 130px)", right: "16px" }} // initial on right side
+        >
+          <MemoryCardOverlay
+            name={currentName}
+            relationship={relationship || "Loved One"}
+            caption={caption}
+            photoUrl={photoUrl}
+            photosCount={photosCount}
+            active
+          />
         </div>
-        <div className="text-sm text-gray-700">
-          {currentName !== "Unknown" ? caption : "Please step into the frame."}
+      )}
+
+      {/* tiny status pill (debug) */}
+      <div className="absolute top-3 right-3 z-20">
+        <div className="text-[11px] px-2 py-1 rounded-md bg-black/50 text-white/90">
+          {status.replaceAll("-", " ")}
+          {currentName !== "Unknown" ? ` • ${confidence.toFixed(2)}` : ""}
         </div>
       </div>
     </div>
