@@ -1,4 +1,4 @@
-import * as admin from 'firebase-admin';
+import fetch from 'node-fetch';
 import dotenv from 'dotenv';
 import path from 'path';
 
@@ -11,79 +11,217 @@ console.log('FIREBASE_PROJECT_ID:', process.env.FIREBASE_PROJECT_ID ? '✓ Set' 
 console.log('FIREBASE_PRIVATE_KEY:', process.env.FIREBASE_PRIVATE_KEY ? '✓ Set' : '✗ Missing');
 console.log('FIREBASE_CLIENT_EMAIL:', process.env.FIREBASE_CLIENT_EMAIL ? '✓ Set' : '✗ Missing');
 
-// Try a simplified Firebase initialization
-try {
-    if (!admin.apps.length) {
-        admin.initializeApp({
-            credential: admin.credential.cert({
-                projectId: process.env.FIREBASE_PROJECT_ID,
-                clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-            }),
-            projectId: process.env.FIREBASE_PROJECT_ID
+// Firebase REST API configuration
+const PROJECT_ID = process.env.FIREBASE_PROJECT_ID;
+const FIRESTORE_BASE_URL = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents`;
+
+// Simple JWT token generation for service account authentication
+import { sign } from 'jsonwebtoken';
+
+async function getAccessToken(): Promise<string> {
+    try {
+        // Use Google's OAuth2 service with a simpler approach
+        const now = Math.floor(Date.now() / 1000);
+        
+        // Create the assertion payload
+        const header = {
+            alg: 'RS256',
+            typ: 'JWT'
+        };
+        
+        const payload = {
+            iss: process.env.FIREBASE_CLIENT_EMAIL,
+            scope: 'https://www.googleapis.com/auth/datastore',
+            aud: 'https://oauth2.googleapis.com/token',
+            exp: now + 3600, // 1 hour
+            iat: now
+        };
+
+        let privateKey = process.env.FIREBASE_PRIVATE_KEY;
+        if (!privateKey) {
+            throw new Error('Firebase private key not found in environment variables');
+        }
+        
+        // Clean up the private key format
+        privateKey = privateKey.replace(/^"|"$/g, ''); // Remove surrounding quotes
+        privateKey = privateKey.replace(/\\n/g, '\n'); // Convert \n to actual newlines
+        
+        console.log('🔧 Private key debug info:', {
+            hasBeginMarker: privateKey.includes('-----BEGIN PRIVATE KEY-----'),
+            hasEndMarker: privateKey.includes('-----END PRIVATE KEY-----'),
+            keyLength: privateKey.length,
+            firstChars: privateKey.substring(0, 50),
+            lastChars: privateKey.substring(privateKey.length - 50)
         });
-        console.log('✓ Firebase Admin SDK initialized successfully');
+
+        // Create JWT token manually to debug
+        const jwt = sign(payload, privateKey, { 
+            algorithm: 'RS256',
+            header: header
+        });
+        
+        console.log('🔧 JWT token created successfully, length:', jwt.length);
+
+        // Exchange JWT for access token
+        const response = await fetch('https://oauth2.googleapis.com/token', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+                grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+                assertion: jwt
+            })
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('❌ OAuth2 token request failed:', response.status, errorText);
+            throw new Error(`Token request failed: ${response.status} - ${errorText}`);
+        }
+
+        const data = await response.json() as { access_token: string };
+        console.log('✅ Access token obtained successfully');
+        return data.access_token;
+    } catch (error) {
+        console.error('❌ Error getting access token:', error);
+        throw error;
     }
-} catch (error) {
-    console.error('✗ Firebase initialization failed:', error);
-    throw new Error('Failed to initialize Firebase Admin SDK');
 }
 
-const db = admin.firestore();
+console.log('✓ Firebase REST API service initialized successfully');
 
 export async function addPhotoEntry(
     name: string,
     relation: string,
     photoDescription: string,
     photoURL: string
-): Promise<string>{
+): Promise<string> {
     try {
-        //Creates a collection 'people' and smaller entries within the collection for each person
-        const personRef = db.collection('people').doc(name);
-        await personRef.set(
-            {
-                relation: relation,
-                //Tracks updates to photoURL and stuff
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-                //Tracks when person was added to database
-                createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-        );
-        //Creates a subcollection 'photos' within each person entry
-        const photosRef = await personRef.collection('photos').add({
-            photoDescription: photoDescription,
-            photoURL: photoURL,
-            uploadedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        //Debug stuff, tells us the ID of the new photo entry
-        console.log(`Photo entry added with ID: ${photosRef.id}`);
-        return photosRef.id;
+        console.log('🔥 Starting Firestore REST API save...');
+        
+        const accessToken = await getAccessToken();
+        
+        // Create person document first
+        const personDocUrl = `${FIRESTORE_BASE_URL}/people/${name}`;
+        const personData = {
+            fields: {
+                relation: { stringValue: relation },
+                updatedAt: { timestampValue: new Date().toISOString() },
+                createdAt: { timestampValue: new Date().toISOString() }
+            }
+        };
 
-    }
-    //Also debug stuff, tells us if there was an error adding the photo entry
-    catch(error){
-        console.error("Error adding photo entry: ", error);
+        // Update person document (merge = true)
+        const personResponse = await fetch(`${personDocUrl}?updateMask.fieldPaths=relation&updateMask.fieldPaths=updatedAt`, {
+            method: 'PATCH',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(personData)
+        });
+
+        if (!personResponse.ok) {
+            // If person doesn't exist, create it
+            if (personResponse.status === 404) {
+                const createPersonResponse = await fetch(personDocUrl, {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(personData)
+                });
+                
+                if (!createPersonResponse.ok) {
+                    throw new Error(`Failed to create person document: ${createPersonResponse.statusText}`);
+                }
+            } else {
+                throw new Error(`Failed to update person document: ${personResponse.statusText}`);
+            }
+        }
+
+        // Add photo to subcollection
+        const photosCollectionUrl = `${FIRESTORE_BASE_URL}/people/${name}/photos`;
+        const photoData = {
+            fields: {
+                photoDescription: { stringValue: photoDescription },
+                photoURL: { stringValue: photoURL },
+                uploadedAt: { timestampValue: new Date().toISOString() }
+            }
+        };
+
+        const photoResponse = await fetch(photosCollectionUrl, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(photoData)
+        });
+
+        if (!photoResponse.ok) {
+            throw new Error(`Failed to add photo: ${photoResponse.statusText}`);
+        }
+
+        const photoResult = await photoResponse.json() as any;
+        const photoId = photoResult.name.split('/').pop(); // Extract document ID from full path
+        
+        console.log(`✅ Photo entry added successfully with ID: ${photoId}`);
+        return photoId;
+
+    } catch (error) {
+        console.error("❌ Error adding photo entry:", error);
         throw error;
     }
-};
+}
 
 //Function to get all photos for a specific person, returns an array of 
-export async function getPhotosForPerson(name: string): Promise<any[]>{
+export async function getPhotosForPerson(name: string): Promise<any[]> {
     try {
-        const personRef = db.collection('people').doc(name);
-        const photosSnapshot = await personRef.collection('photos').get();
-        const photosArray: any[] = [];
-        //Returns an object with string photo ID, string photoURL, string photoDescription, and Timestamp (Firestore object) uploadedAt
-        //idk if we'll need the Firestore Timestamp object but it's here if we do
-        photosSnapshot.forEach(doc => {
-            photosArray.push({ id: doc.id, 
-                                ...doc.data() });
+        console.log(`🔍 Getting photos for person: ${name}`);
+        
+        const accessToken = await getAccessToken();
+        const photosCollectionUrl = `${FIRESTORE_BASE_URL}/people/${name}/photos`;
+        
+        const response = await fetch(photosCollectionUrl, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+            }
         });
-        console.log(`Retrieved ${photosArray.length} photos for person: ${name}`);
+
+        if (!response.ok) {
+            if (response.status === 404) {
+                console.log(`No photos found for person: ${name}`);
+                return [];
+            }
+            throw new Error(`Failed to get photos: ${response.statusText}`);
+        }
+
+        const data = await response.json() as any;
+        const photosArray: any[] = [];
+
+        if (data.documents) {
+            data.documents.forEach((doc: any) => {
+                const docId = doc.name.split('/').pop();
+                const fields = doc.fields;
+                
+                photosArray.push({
+                    id: docId,
+                    photoDescription: fields.photoDescription?.stringValue || '',
+                    photoURL: fields.photoURL?.stringValue || '',
+                    uploadedAt: fields.uploadedAt?.timestampValue || null
+                });
+            });
+        }
+
+        console.log(`✅ Retrieved ${photosArray.length} photos for person: ${name}`);
         return photosArray;
     } catch (error) {
-        console.error(`Error getting photos for ${name}:`, error);
+        console.error(`❌ Error getting photos for ${name}:`, error);
         throw error;
     }
-};
+}
