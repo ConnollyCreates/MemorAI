@@ -17,61 +17,65 @@ export default function Caregiver() {
           </p>
         </div>
 
-        <div className="max-w-7xl mx-auto">
-          {/* First row */}
-          <div className="flex justify-center items-center gap-12 mb-8">
-            <div className="w-80 bg-white/10 backdrop-blur-sm rounded-xl shadow-xl border border-white/20 p-6 flex items-center justify-center h-24 hover:bg-white/15 transition-all duration-300">
-              <h2 className="text-xl font-semibold text-white">Name</h2>
+        <div className="max-w-4xl mx-auto">
+          {/* Single Large Upload Box */}
+          <div className="bg-white/10 backdrop-blur-sm rounded-2xl shadow-2xl border border-white/20 p-8 hover:bg-white/15 transition-all duration-300">
+            <div className="text-center mb-8">
+              <h2 className="text-3xl font-semibold text-white mb-4">Upload Person Information</h2>
+              <p className="text-cyan-200 text-lg">Add photos and details to help with recognition</p>
             </div>
-
-            <div className="w-80 bg-white/10 backdrop-blur-sm rounded-xl shadow-xl border border-white/20 p-6 hover:bg-white/15 transition-all duration-300">
-              <div className="h-36 bg-white/5 rounded-lg border-2 border-dashed border-cyan-300/50 flex items-center justify-center hover:border-cyan-300/80 transition-colors duration-300">
-                <div className="text-center">
-                  <p className="text-cyan-200 font-medium mb-2">Upload Photo</p>
-                  <p className="text-xs text-cyan-300/80">Drag & drop or click to browse</p>
+            
+            <div className="h-96 bg-white/5 rounded-xl border-3 border-dashed border-cyan-300/50 flex items-center justify-center hover:border-cyan-300/80 transition-colors duration-300 mb-8">
+              <div className="text-center">
+                <div className="mb-6">
+                  <svg className="w-16 h-16 text-cyan-200 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                  </svg>
                 </div>
+                <p className="text-2xl text-cyan-200 font-semibold mb-3">Upload Photos</p>
+                <p className="text-lg text-cyan-300/80 mb-2">Drag & drop multiple photos here</p>
+                <p className="text-sm text-cyan-300/60">or click to browse your files</p>
+                <p className="text-xs text-cyan-300/40 mt-4">Supports: JPG, PNG, GIF • Max 10MB each</p>
               </div>
             </div>
-          </div>
 
-          {/* Second row */}
-          <div className="flex justify-center items-center gap-12 mb-8">
-            <div className="w-80 bg-white/10 backdrop-blur-sm rounded-xl shadow-xl border border-white/20 p-6 flex items-center justify-center h-24 hover:bg-white/15 transition-all duration-300">
-              <h2 className="text-xl font-semibold text-white">Relationship</h2>
-            </div>
-
-            <div className="w-80 bg-white/10 backdrop-blur-sm rounded-xl shadow-xl border border-white/20 p-6 hover:bg-white/15 transition-all duration-300">
-              <div className="h-36 bg-white/5 rounded-lg border-2 border-dashed border-cyan-300/50 flex items-center justify-center hover:border-cyan-300/80 transition-colors duration-300">
-                <div className="text-center">
-                  <p className="text-cyan-200 font-medium mb-2">Upload Photo</p>
-                  <p className="text-xs text-cyan-300/80">Drag & drop or click to browse</p>
-                </div>
+            {/* Input Fields Row */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+              <div className="bg-white/5 rounded-xl p-4 border border-white/10">
+                <label className="block text-cyan-200 font-medium mb-2">Name</label>
+                <input 
+                  type="text" 
+                  placeholder="Enter person's name"
+                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-cyan-300/50 focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:border-transparent transition-all"
+                />
               </div>
-            </div>
-          </div>
-
-          {/* Third row */}
-          <div className="flex justify-center items-center gap-12 mb-8">
-            <div className="w-80 bg-white/10 backdrop-blur-sm rounded-xl shadow-xl border border-white/20 p-6 flex items-center justify-center h-24 hover:bg-white/15 transition-all duration-300">
-              <h2 className="text-xl font-semibold text-white">Activity</h2>
-            </div>
-
-            <div className="w-80 bg-white/10 backdrop-blur-sm rounded-xl shadow-xl border border-white/20 p-6 hover:bg-white/15 transition-all duration-300">
-              <div className="h-36 bg-white/5 rounded-lg border-2 border-dashed border-cyan-300/50 flex items-center justify-center hover:border-cyan-300/80 transition-colors duration-300">
-                <div className="text-center">
-                  <p className="text-cyan-200 font-medium mb-2">Upload Photo</p>
-                  <p className="text-xs text-cyan-300/80">Drag & drop or click to browse</p>
-                </div>
+              
+              <div className="bg-white/5 rounded-xl p-4 border border-white/10">
+                <label className="block text-cyan-200 font-medium mb-2">Relationship</label>
+                <input 
+                  type="text" 
+                  placeholder="e.g., Son, Daughter, Friend"
+                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-cyan-300/50 focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:border-transparent transition-all"
+                />
+              </div>
+              
+              <div className="bg-white/5 rounded-xl p-4 border border-white/10">
+                <label className="block text-cyan-200 font-medium mb-2">Activity/Notes</label>
+                <input 
+                  type="text" 
+                  placeholder="Favorite activities together"
+                  className="w-full bg-white/10 border border-white/20 rounded-lg px-4 py-3 text-white placeholder-cyan-300/50 focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:border-transparent transition-all"
+                />
               </div>
             </div>
           </div>
 
           {/* Action Buttons */}
           <div className="flex justify-center gap-6 mt-12">
-            <button className="px-8 py-3 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full text-white font-semibold hover:from-cyan-400 hover:to-blue-400 transition-all duration-300 transform hover:scale-105 shadow-lg">
+            <button className="px-10 py-4 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full text-white font-semibold hover:from-cyan-400 hover:to-blue-400 transition-all duration-300 transform hover:scale-105 shadow-lg text-lg">
               Save Profile
             </button>
-            <button className="px-8 py-3 border-2 border-white/30 rounded-full text-white font-semibold hover:bg-white/10 transition-all duration-300">
+            <button className="px-10 py-4 border-2 border-white/30 rounded-full text-white font-semibold hover:bg-white/10 transition-all duration-300 text-lg">
               Preview
             </button>
           </div>
