@@ -1,2 +1,3 @@
 backend/.env
+backend/src/config/*.json
 cv-service/__pycache__/app.cpython-311.pyc

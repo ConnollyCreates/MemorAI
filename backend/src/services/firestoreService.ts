@@ -1,6 +1,34 @@
 import * as admin from 'firebase-admin';
+import dotenv from 'dotenv';
 
-const serviceAccount = require('../config/memorai-66fab-firebase-adminsdk-fbsvc-0461e70293.json');
+// Load environment variables
+dotenv.config();
+
+// Initialize Firebase Admin using environment variables or JSON file
+let serviceAccount;
+
+if (process.env.FIREBASE_PRIVATE_KEY) {
+    // Use environment variables (recommended for production)
+    serviceAccount = {
+        type: "service_account",
+        project_id: process.env.FIREBASE_PROJECT_ID,
+        private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+        private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        client_email: process.env.FIREBASE_CLIENT_EMAIL,
+        client_id: process.env.FIREBASE_CLIENT_ID,
+        auth_uri: "https://accounts.google.com/o/oauth2/auth",
+        token_uri: "https://oauth2.googleapis.com/token",
+        auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+        client_x509_cert_url: process.env.FIREBASE_CLIENT_X509_CERT_URL
+    };
+} else {
+    // Fallback to JSON file (for local development)
+    try {
+        serviceAccount = require('../config/memorai-66fab-firebase-adminsdk-fbsvc-0461e70293.json');
+    } catch (error) {
+        throw new Error('Firebase credentials not found. Please set environment variables or add the service account JSON file.');
+    }
+}
 
 admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
