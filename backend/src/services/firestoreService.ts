@@ -5,10 +5,19 @@ import path from 'path';
 // Load environment variables from the correct path
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
+// Debug: Check if environment variables are loaded
+console.log('Checking Firebase environment variables:');
+console.log('FIREBASE_PROJECT_ID:', process.env.FIREBASE_PROJECT_ID ? '✓ Set' : '✗ Missing');
+console.log('FIREBASE_PRIVATE_KEY:', process.env.FIREBASE_PRIVATE_KEY ? '✓ Set' : '✗ Missing');
+console.log('FIREBASE_CLIENT_EMAIL:', process.env.FIREBASE_CLIENT_EMAIL ? '✓ Set' : '✗ Missing');
+
 // Initialize Firebase Admin using environment variables or JSON file
 let serviceAccount;
 
-if (process.env.FIREBASE_PRIVATE_KEY) {
+if (process.env.FIREBASE_PRIVATE_KEY && 
+    process.env.FIREBASE_PROJECT_ID && 
+    process.env.FIREBASE_CLIENT_EMAIL && 
+    process.env.FIREBASE_CLIENT_ID) {
     // Use environment variables (recommended for production)
     serviceAccount = {
         type: "service_account",
@@ -23,12 +32,21 @@ if (process.env.FIREBASE_PRIVATE_KEY) {
         client_x509_cert_url: process.env.FIREBASE_CLIENT_X509_CERT_URL
     };
 } else {
-    // Fallback to JSON file (for local development)
-    try {
-        serviceAccount = require('../config/memorai-66fab-firebase-adminsdk-fbsvc-0461e70293.json');
-    } catch (error) {
-        throw new Error('Firebase credentials not found. Please set environment variables or add the service account JSON file.');
-    }
+    // No environment variables found - provide helpful error message
+    console.error('Firebase environment variables not found. Required variables:');
+    console.error('- FIREBASE_PROJECT_ID');
+    console.error('- FIREBASE_PRIVATE_KEY_ID');
+    console.error('- FIREBASE_PRIVATE_KEY');
+    console.error('- FIREBASE_CLIENT_EMAIL');
+    console.error('- FIREBASE_CLIENT_ID');
+    console.error('- FIREBASE_CLIENT_X509_CERT_URL');
+    console.error('');
+    console.error('Please:');
+    console.error('1. Copy .env.example to .env');
+    console.error('2. Download your Firebase service account JSON from Firebase Console');
+    console.error('3. Fill in the .env file with values from the JSON');
+    
+    throw new Error('Firebase credentials not configured. Please set up environment variables in .env file.');
 }
 
 admin.initializeApp({
