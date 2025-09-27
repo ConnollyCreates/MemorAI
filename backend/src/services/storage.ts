@@ -2,7 +2,8 @@ import { BlobServiceClient, StorageSharedKeyCredential } from '@azure/storage-bl
 import dotenv from 'dotenv';
 import path from 'path';
 
-// Load environment variables from the correct path
+// Load environment variables - this works from any computer
+dotenv.config({ path: path.join(process.cwd(), '.env') });
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 // Get Azure credentials from environment variables

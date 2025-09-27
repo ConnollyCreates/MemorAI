@@ -2,8 +2,8 @@ import fetch from 'node-fetch';
 import dotenv from 'dotenv';
 import path from 'path';
 
-// Load environment variables from the correct path
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+// Load environment variables - this works from any computer
+dotenv.config({ path: path.join(process.cwd(), '.env') });
 
 // Debug the path resolution
 console.log('Current __dirname:', __dirname);
