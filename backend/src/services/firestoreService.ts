@@ -1,8 +1,9 @@
 import * as admin from 'firebase-admin';
 import dotenv from 'dotenv';
+import path from 'path';
 
-// Load environment variables
-dotenv.config();
+// Load environment variables from the correct path
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 // Initialize Firebase Admin using environment variables or JSON file
 let serviceAccount;
