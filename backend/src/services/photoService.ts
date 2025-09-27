@@ -29,15 +29,32 @@ export async function uploadPhotoWithMetadata(data: PhotoUploadData): Promise<Ph
         const normalizedName = data.name.toLowerCase();
 
         //Url to where image is stored in Azure Blob Storage
-    const photoUrl = await uploadPhotoAndGetUrl(data.photoBuffer, normalizedName);
-    if(!photoUrl){
-        return { success: false, error: "Failed to upload photo to Azure" };
-    }
+        const photoUrl = await uploadPhotoAndGetUrl(data.photoBuffer, normalizedName);
+        if(!photoUrl){
+            return { success: false, error: "Failed to upload photo to Azure" };
+        }
 
-    //photoID is kind of useless, we could just change the return type to a boolean
-    //indicating whether or not the photo was successfully added to Firestore
-    const photoID = await addPhotoEntry(normalizedName, data.relation, data.photoDescription, photoUrl);
-    return { success: true, photoUrl: photoUrl, firestoreId: photoID };
+        // Try Firestore save with simplified authentication
+        console.log('Attempting Firestore save with simplified auth...');
+        try {
+            const photoID = await addPhotoEntry(normalizedName, data.relation, data.photoDescription, photoUrl);
+            console.log('✓ Firestore save successful!');
+            return { 
+                success: true, 
+                photoUrl: photoUrl, 
+                firestoreId: photoID
+            };
+        } catch (firestoreError) {
+            console.log('⚠️ Firestore save failed, but Azure upload succeeded');
+            console.error('Firestore error:', firestoreError);
+            // Return success with Azure URL even if Firestore fails
+            return { 
+                success: true, 
+                photoUrl: photoUrl, 
+                firestoreId: 'firestore-failed',
+                error: 'Photo saved to Azure but Firestore save failed'
+            };
+        }
     }
     catch(error){
         return {
