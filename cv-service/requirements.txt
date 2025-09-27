@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+insightface
+onnxruntime
+faiss-cpu
+numpy
+opencv-python
+pydantic
