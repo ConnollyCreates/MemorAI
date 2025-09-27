@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+#firestore database stuff hehe
+config/memorai-66fab-firebase-adminsdk-fbsvc-0461e70293.json
