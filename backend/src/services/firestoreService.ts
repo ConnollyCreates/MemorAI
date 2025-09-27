@@ -3,7 +3,11 @@ import dotenv from 'dotenv';
 import path from 'path';
 
 // Load environment variables from the correct path
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config({ path: '/Users/chrisxxc/MemorAI/MemorAI/backend/.env' });
+
+// Debug the path resolution
+console.log('Current __dirname:', __dirname);
+console.log('Resolved .env path:', path.resolve(__dirname, '../../../backend/.env'));
 
 // Debug: Check if environment variables are loaded
 console.log('Checking Firebase environment variables:');
