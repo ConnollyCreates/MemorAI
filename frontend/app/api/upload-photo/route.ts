@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-//import backend function
-import { uploadPhotoWithMetadata, PhotoUploadData, PhotoUploadResult } from '../../../../backend/src/services/photoService';
-
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
@@ -45,31 +42,35 @@ export async function POST(request: NextRequest) {
       photoDescription
     });
 
-    // Convert file to buffer
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
+    // Create FormData to send to backend
+    const backendFormData = new FormData();
+    backendFormData.append('photo', file);
+    backendFormData.append('name', name);
+    backendFormData.append('relation', relation);
+    backendFormData.append('photoDescription', photoDescription);
 
-    // Call your actual backend service
-    const result = await uploadPhotoWithMetadata({
-      name,
-      relation,
-      photoDescription,
-      photoBuffer: buffer
+    // Call backend API
+    const backendResponse = await fetch('http://localhost:4000/api/upload-photo', {
+      method: 'POST',
+      body: backendFormData, // Don't set Content-Type, let browser set it with boundary
     });
 
-    if (result.success) {
-      return NextResponse.json({
-        success: true,
-        message: 'Photo uploaded successfully',
-        photoUrl: result.photoUrl,
-        firestoreId: result.firestoreId
-      });
-    } else {
+    if (!backendResponse.ok) {
+      const errorText = await backendResponse.text();
+      console.error('Backend response error:', errorText);
       return NextResponse.json(
-        { error: result.error || 'Upload failed' }, 
-        { status: 500 }
+        { error: `Backend error: ${errorText}` }, 
+        { status: backendResponse.status }
       );
     }
+
+    const result = await backendResponse.json();
+
+    return NextResponse.json({
+      success: true,
+      message: 'Photo uploaded successfully',
+      data: result.data
+    });
 
   } catch (error) {
     console.error('Upload API error:', error);
