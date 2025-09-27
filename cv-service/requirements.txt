@@ -6,3 +6,4 @@ faiss-cpu
 numpy
 opencv-python
 pydantic
+python-multipart
