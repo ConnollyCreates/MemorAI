@@ -2,7 +2,12 @@ from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 import numpy as np, cv2, os, time, json
 from typing import List, Dict
-from insightface.app import FaceAnalysis
+try:
+    from insightface.app import FaceAnalysis
+    INSIGHTFACE_IMPORT_ERROR = None
+except Exception as _e:
+    FaceAnalysis = None
+    INSIGHTFACE_IMPORT_ERROR = _e
 
 # ---------- Config ----------
 THRESH      = float(os.getenv("THRESHOLD", "0.60"))   # ID threshold (cosine on L2-normed)
@@ -22,9 +27,16 @@ app.add_middleware(
 )
 
 # ---------- InsightFace ----------
-fa = FaceAnalysis(name="buffalo_l")
-# CPU
-fa.prepare(ctx_id=-1, det_thresh=DET_THRESH, det_size=(320, 320))
+fa = None
+if FaceAnalysis is not None:
+    try:
+        fa = FaceAnalysis(name="buffalo_l")
+        # CPU
+        fa.prepare(ctx_id=-1, det_thresh=DET_THRESH, det_size=(320, 320))
+    except Exception as _e:
+        print("[warn] failed to initialize FaceAnalysis; CV endpoints will be disabled:", _e)
+else:
+    print("[warn] insightface import failed; CV endpoints will be disabled:", INSIGHTFACE_IMPORT_ERROR)
 
 # ---------- Gallery / FAISS ----------
 people: List[Dict] = []  # [{id,name,relationship,embedding: np.ndarray}]
