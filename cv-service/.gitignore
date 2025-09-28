@@ -10,3 +10,4 @@
 .venv_backup*
 .venv_old*
 .venv/Lib/site-packages/_distutils_hack/
+__pycache__
