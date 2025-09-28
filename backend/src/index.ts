@@ -3,6 +3,8 @@ import cors from "cors";
 import multer from "multer";
 import dotenv from 'dotenv';
 import { uploadPhotoWithMetadata } from "./services/photoService";
+import { deletePerson, deletePhoto } from "./services/firestoreService";
+import { syncGalleryFromFirestore } from "./services/vision";
 
 // Load environment variables
 dotenv.config();
@@ -15,6 +17,16 @@ app.use(express.json());
 // Root + health
 app.get("/", (_, res) => res.json({ ok: true, service: "backend" }));
 app.get("/health", (_, res) => res.json({ ok: true, service: "backend" }));
+
+// Manual trigger to sync CV gallery from Firestore
+app.post("/api/sync-cv", async (_req, res) => {
+  try {
+    const result = await syncGalleryFromFirestore(3, 800);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
 
 // Minimal /memories stub (replace with DB later)
 app.get("/memories", (req, res) => {
@@ -175,6 +187,54 @@ app.post("/api/upload-photo", upload.single('photo'), async (req, res) => {
     });
   }
 });
+
+// Delete a specific photo under a person
+app.delete('/api/people/:name/photos/:photoId', async (req, res) => {
+  const name = String(req.params.name || '').toLowerCase();
+  const photoId = String(req.params.photoId || '');
+  if (!name || !photoId) {
+    return res.status(400).json({ ok: false, error: 'Missing name or photoId' });
+  }
+  try {
+    const ok = await deletePhoto(name, photoId);
+    // Always attempt to sync after mutation (best-effort)
+    const sync = await syncGalleryFromFirestore(3, 800);
+    return res.json({ ok, sync });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Delete a person and all their photos
+app.delete('/api/people/:name', async (req, res) => {
+  const name = String(req.params.name || '').toLowerCase();
+  if (!name) {
+    return res.status(400).json({ ok: false, error: 'Missing name' });
+  }
+  try {
+    const ok = await deletePerson(name);
+    const sync = await syncGalleryFromFirestore(3, 800);
+    return res.json({ ok, sync });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Optional: background periodic auto-sync if configured
+const autoSyncMs = Number(process.env.CV_AUTO_SYNC_INTERVAL_MS || 0);
+if (autoSyncMs > 0) {
+  console.log(`CV auto-sync enabled: every ${autoSyncMs}ms`);
+  setInterval(async () => {
+    try {
+      const res = await syncGalleryFromFirestore(1, 0);
+      if (!res.ok) {
+        console.warn('CV auto-sync failed:', res);
+      }
+    } catch (e) {
+      console.warn('CV auto-sync error:', e);
+    }
+  }, autoSyncMs);
+}
 
 const PORT = Number(process.env.PORT || 4000);
 app.listen(PORT, () => console.log(`Backend running on http://localhost:${PORT}`));
