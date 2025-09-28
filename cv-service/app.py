@@ -1,7 +1,11 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Query
+import sys as _sys, os as _os
+_sys.path.append(_os.path.dirname(_os.path.abspath(__file__)))
 from fastapi.middleware.cors import CORSMiddleware
 import numpy as np, cv2, os, time, json
 from typing import List, Dict
+from pydantic import BaseModel
+import requests as pyreq
 try:
     from insightface.app import FaceAnalysis
     INSIGHTFACE_IMPORT_ERROR = None
@@ -9,7 +13,17 @@ except Exception as _e:
     FaceAnalysis = None
     INSIGHTFACE_IMPORT_ERROR = _e
 
+# Import Firestore service
+try:
+    from firestore_service import firestore_service  # type: ignore[reportMissingImports]
+    HAS_FIRESTORE = True
+except Exception as e:
+    print(f"[warn] Firestore service disabled: {e}")
+    HAS_FIRESTORE = False
+    firestore_service = None
+
 # ---------- Config ----------
+<<<<<<< HEAD
 THRESH       = float(os.getenv("THRESHOLD", "0.60"))     # cosine threshold
 DET_THRESH   = float(os.getenv("DET_THRESHOLD", "0.38")) # detector conf
 DIM          = 512
@@ -20,16 +34,81 @@ BACKEND_GALLERY_EXPORT = os.getenv(
     "BACKEND_GALLERY_EXPORT",
     "http://127.0.0.1:4000/cv/gallery/export"
 )
+=======
+THRESH      = float(os.getenv("THRESHOLD", "0.35"))   # ID threshold (cosine on L2-normed) - lowered for better recognition
+DET_THRESH  = float(os.getenv("DET_THRESHOLD", "0.38")) # Detector conf threshold
+DIM         = 512
+THROTTLE_MS = float(os.getenv("FAST_THROTTLE_MS", "250"))
+ROI_MARGIN  = float(os.getenv("ROI_MARGIN", "0.25"))
+>>>>>>> 7295fd0c1b7276726599b9d72f6c253d5e0f38c8
 
 # ---------- App / CORS ----------
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3001", "http://127.0.0.1:3001"],
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
 )
+
+# Optional: reduce noisy library warnings via env toggles
+if os.getenv("ALBUMENTATIONS_DISABLE_VERSION_CHECK") is None:
+    os.environ["ALBUMENTATIONS_DISABLE_VERSION_CHECK"] = "1"
+if os.getenv("ORT_LOGGING_LEVEL") is None:
+    os.environ["ORT_LOGGING_LEVEL"] = "ERROR"
+
+# Gemini AI for memory descriptions
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
+
+def generate_memory_description(person_name: str, relationship: str, photos: list) -> str:
+    """Generate a sentimental memory description using Gemini AI"""
+    if not GEMINI_API_KEY:
+        return f"A cherished memory with {person_name}."
+    
+    try:
+        # Build context from photos
+        photo_contexts = []
+        for photo in photos[-3:]:  # Use last 3 photos
+            desc = photo.get("photoDescription", "")
+            if desc:
+                photo_contexts.append(desc)
+        
+        context = f"Person: {person_name} ({relationship})\n"
+        if photo_contexts:
+            context += f"Recent memories: {'; '.join(photo_contexts)}\n"
+        
+        prompt = f"""Based on this information about {person_name}, create a short, warm, sentimental message (1-2 sentences) that would be meaningful to display when someone sees them:
+
+{context}
+
+Make it personal and heartwarming, focusing on the relationship and shared memories. Keep it under 50 words."""
+
+        payload = {
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }]
+        }
+        
+        headers = {"Content-Type": "application/json"}
+        response = pyreq.post(
+            f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+            json=payload,
+            headers=headers,
+            timeout=10,
+            verify=_VERIFY_PARAM
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            if "candidates" in data and data["candidates"]:
+                text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                return text if len(text) < 200 else f"A cherished memory with {person_name}."
+    except Exception as e:
+        print(f"[warn] Gemini API error for {person_name}: {e}")
+    
+    return f"A cherished memory with {person_name}."
 
 # ---------- InsightFace ----------
 fa = None
@@ -103,6 +182,7 @@ def load_people():
     except Exception as e:
         print("[warn] failed to load gallery:", e)
 
+<<<<<<< HEAD
 # ----- Pull gallery from backend (Firestore via Node) -----
 def pull_gallery_from_backend() -> Tuple[bool, int]:
     global people
@@ -132,6 +212,84 @@ def pull_gallery_from_backend() -> Tuple[bool, int]:
 ok, _ = pull_gallery_from_backend()
 if not ok:
     load_people()
+=======
+# ---------- Firestore sync helper ----------
+def _sync_gallery_from_firestore_impl(max_photos: int = 3):
+    if not HAS_FIRESTORE or not firestore_service:
+        return {"ok": False, "reason": "firestore_disabled"}
+    if fa is None:
+        return {"ok": False, "reason": "fa_not_initialized"}
+
+    synced = []
+    errors = []
+    try:
+        # Ensure we read the latest Firestore state
+        try:
+            firestore_service.invalidate_caches()
+        except Exception:
+            pass
+        names = firestore_service.get_all_people(bypass_cache=True)
+        for name in names:
+            pdata = firestore_service.get_person_data(name, bypass_cache=True)
+            if not pdata:
+                errors.append({"name": name, "reason": "no_person_data"}); continue
+            urls = [p.get("photoURL") for p in (pdata.get("photos") or []) if p.get("photoURL")] 
+            urls = urls[-max_photos:] if urls else []
+            if not urls:
+                errors.append({"name": name, "reason": "no_photo_urls"}); continue
+
+            imgs = []
+            for u in urls:
+                img = read_image_from_url(u)
+                if img is not None:
+                    imgs.append(img)
+            if not imgs:
+                errors.append({"name": name, "reason": "download_failed"}); continue
+
+            embs = []
+            for img in imgs:
+                faces = fa.get(img)
+                if not faces:
+                    continue
+                embs.append(l2n(faces[0].normed_embedding.astype("float32")))
+            if not embs:
+                errors.append({"name": name, "reason": "no_face_in_images"}); continue
+            centroid = l2n(np.mean(np.stack(embs, axis=0), axis=0).astype("float32"))
+
+            # replace existing entries with same name
+            global people
+            people = [p for p in people if p["name"] != name]
+            pid = f"{name.lower()}_{len(people)}"
+            people.append({"id": pid, "name": name, "relationship": pdata.get("relation", ""), "embedding": centroid})
+        rebuild_index(); save_people()
+        synced = [p["name"] for p in people]
+        return {"ok": True, "synced_names": synced, "errors": errors}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "synced_names": synced, "errors": errors}
+
+def read_image(up: UploadFile) -> np.ndarray:
+    data = np.frombuffer(up.file.read(), np.uint8); up.file.seek(0)
+    return cv2.imdecode(data, cv2.IMREAD_COLOR)
+>>>>>>> 7295fd0c1b7276726599b9d72f6c253d5e0f38c8
+
+_VERIFY_SSL = os.getenv("REQUESTS_VERIFY", "1") not in ("0", "false", "False")
+if os.getenv("CV_INSECURE_SKIP_VERIFY", "0") in ("1", "true", "True"):
+    _VERIFY_SSL = False
+_CA_BUNDLE = os.getenv("REQUESTS_CA_BUNDLE") or os.getenv("CURL_CA_BUNDLE")
+_VERIFY_PARAM = _CA_BUNDLE if (_VERIFY_SSL and _CA_BUNDLE) else _VERIFY_SSL
+
+def read_image_from_url(url: str, timeout: float = 15.0) -> np.ndarray | None:
+    try:
+        rsp = pyreq.get(url, timeout=timeout, verify=_VERIFY_PARAM)
+        if rsp.status_code != 200:
+            print(f"[warn] fetch image failed {rsp.status_code} {url}")
+            return None
+        arr = np.frombuffer(rsp.content, np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        return img
+    except Exception as e:
+        print(f"[warn] read_image_from_url error for {url}: {e}")
+        return None
 
 # ---------- Tiny IoU Tracker ----------
 TRACKS: Dict[int, Dict] = {}
@@ -245,6 +403,258 @@ async def enroll(
     rebuild_index()
     save_people()  # local fallback copy
     return {"ok": True, "personId": pid}
+
+class EnrollFromUrlsBody(BaseModel):
+    name: str
+    relationship: str = ""
+    urls: List[str]
+
+@app.post("/enroll_from_urls")
+def enroll_from_urls(body: EnrollFromUrlsBody):
+    if fa is None:
+        return {"ok": False, "reason": "fa_not_initialized"}
+    imgs: List[np.ndarray] = []
+    for u in body.urls[:3]:
+        img = read_image_from_url(u)
+        if img is not None:
+            imgs.append(img)
+    if len(imgs) < 1:
+        return {"ok": False, "reason": "no_images_downloaded"}
+
+    embs = []
+    for img in imgs:
+        faces = fa.get(img)
+        if not faces:
+            continue
+        f = faces[0]
+        embs.append(l2n(f.normed_embedding.astype("float32")))
+    if len(embs) == 0:
+        return {"ok": False, "reason": "no_face_in_images"}
+    centroid = l2n(np.mean(np.stack(embs, axis=0), axis=0).astype("float32"))
+
+    # replace existing entries with same name
+    global people
+    people = [p for p in people if p["name"] != body.name]
+    pid = f"{body.name.lower()}_{len(people)}"
+    people.append({"id": pid, "name": body.name, "relationship": body.relationship, "embedding": centroid})
+    rebuild_index(); save_people()
+    return {"ok": True, "personId": pid, "images_used": len(embs)}
+
+@app.post("/sync_gallery_from_firestore")
+def sync_gallery_from_firestore(max_photos: int = 3):
+    return _sync_gallery_from_firestore_impl(max_photos=max_photos)
+
+# ---------- Startup hook: auto sync if empty ----------
+@app.on_event("startup")
+async def _startup_sync():
+    # load gallery from disk
+    load_people()
+    if len(people) == 0 and HAS_FIRESTORE and firestore_service and os.getenv("AUTO_SYNC_GALLERY", "1") != "0":
+        print("[info] gallery empty; auto-syncing from Firestore...")
+        res = _sync_gallery_from_firestore_impl(max_photos=int(os.getenv("SYNC_MAX_PHOTOS", "3")))
+        print("[info] auto-sync result:", res)
+
+# ---------- Debug: SSL/OAuth/Firestore probe ----------
+@app.get("/debug/ssl")
+def debug_ssl():
+    info = {
+        "verify": _VERIFY_SSL,
+        "ca_bundle": _CA_BUNDLE,
+        "verify_param": _VERIFY_PARAM if isinstance(_VERIFY_PARAM, bool) else str(_VERIFY_PARAM),
+        "firestore_enabled": HAS_FIRESTORE,
+    }
+    results = {}
+    try:
+        # oauth token
+        if HAS_FIRESTORE and firestore_service:
+            tok = firestore_service.get_access_token()
+            results["oauth_token"] = "ok" if tok else "failed"
+            # list people
+            ppl = firestore_service.get_all_people()
+            results["people_count"] = len(ppl)
+        else:
+            results["oauth_token"] = "firestore_disabled"
+    except Exception as e:
+        results["error"] = str(e)
+    return {"info": info, "results": results}
+
+@app.post("/recognize_with_memory")
+async def recognize_with_memory(image: UploadFile = File(...), threshold: float = THRESH):
+    """
+    Enhanced recognition endpoint that returns memory card data for recognized faces
+    """
+    frame = read_image(image)
+    faces = fa.get(frame)
+    if not faces:
+        assign_tracks([])
+        return {"detections": []}
+
+    embs = []
+    bboxes = []
+    for f in faces:
+        emb = l2n(f.normed_embedding.astype("float32"))
+        embs.append(emb)
+        x1,y1,x2,y2 = [int(v) for v in f.bbox]
+        bboxes.append([x1, y1, x2 - x1, y2 - y1])
+    embs = np.stack(embs, axis=0).astype("float32")
+
+    names, confs = [], []
+    if people:
+        if HAS_FAISS and index is not None and index.ntotal > 0:
+            sims, ids = index.search(embs, 1)
+            for i in range(len(faces)):
+                sim = float(sims[i][0]); best = int(ids[i][0])
+                names.append(people[best]["name"] if sim >= threshold else "Unknown")
+                confs.append(sim)
+        else:
+            gallery = np.stack([p["embedding"] for p in people]).astype("float32")
+            sims = embs @ gallery.T
+            best_ids = np.argmax(sims, axis=1)
+            best_sims = sims[np.arange(len(faces)), best_ids]
+            for sim, bid in zip(best_sims, best_ids):
+                sim = float(sim)
+                names.append(people[bid]["name"] if sim >= threshold else "Unknown")
+                confs.append(sim)
+    else:
+        names = ["Unknown"] * len(faces)
+        confs = [0.0] * len(faces)
+
+    # Build enhanced detections with memory card data
+    enhanced_detections = []
+    for i in range(len(faces)):
+        detection = {
+            "bbox": bboxes[i],
+            "name": names[i],
+            "conf": float(confs[i]),
+            "memory_card": None
+        }
+        # Always show a memory card for recognized faces, even if Firestore fails
+        if names[i] != "Unknown":
+            memory_card = None
+            if HAS_FIRESTORE and firestore_service:
+                try:
+                    t0 = time.time()
+                    person_data = firestore_service.get_person_data(names[i])
+                    if person_data:
+                        # First try to get enhanced description from backend
+                        enhanced_description = None
+                        try:
+                            backend_url = os.getenv("BACKEND_URL", "http://127.0.0.1:4000")
+                            enhance_response = pyreq.post(
+                                f"{backend_url}/enhance-description",
+                                json={
+                                    "name": person_data["name"],
+                                    "relation": person_data["relation"],
+                                    "photos": person_data["photos"]
+                                },
+                                timeout=5,
+                                verify=_VERIFY_PARAM
+                            )
+                            if enhance_response.status_code == 200:
+                                enhanced_data = enhance_response.json()
+                                enhanced_description = enhanced_data.get("enhancedDescription")
+                        except Exception as e:
+                            print(f"[info] Backend enhancement failed for {person_data['name']}, trying Gemini: {e}")
+                        
+                        # Fallback to Gemini AI if backend fails
+                        if not enhanced_description:
+                            enhanced_description = generate_memory_description(
+                                person_data["name"], 
+                                person_data["relation"], 
+                                person_data["photos"]
+                            )
+                        
+                        memory_card = {
+                            "name": person_data["name"],
+                            "relation": person_data["relation"],
+                            "photo_count": person_data["photo_count"],
+                            "most_recent_photo": person_data["most_recent_photo"],
+                            "photos": person_data["photos"],
+                            "activity": enhanced_description
+                        }
+                        t_ms = int((time.time() - t0) * 1000)
+                        print(f"✅ Memory card data loaded for {names[i]} in {t_ms} ms")
+                    else:
+                        print(f"❌ No memory card data found for {names[i]}")
+                except Exception as e:
+                    print(f"❌ Error fetching memory card for {names[i]}: {e}")
+            # Fallback: always provide a default card if Firestore fails
+            if not memory_card:
+                memory_card = {
+                    "name": names[i],
+                    "relation": "Loved One",
+                    "photo_count": 0,
+                    "most_recent_photo": None,
+                    "photos": [],
+                    "activity": f"A favorite memory with {names[i]}."
+                }
+            detection["memory_card"] = memory_card
+        enhanced_detections.append(detection)
+
+    # Apply tracking
+    enhanced_detections = assign_tracks(enhanced_detections)
+    return {"detections": enhanced_detections}
+
+# ---------- Debug helpers to validate recognition without camera ----------
+class RecognizeFromUrlBody(BaseModel):
+    url: str
+
+@app.post("/recognize_from_url")
+def recognize_from_url(body: RecognizeFromUrlBody, threshold: float = THRESH):
+    if fa is None:
+        return {"ok": False, "reason": "fa_not_initialized"}
+    img = read_image_from_url(body.url)
+    if img is None:
+        return {"ok": False, "reason": "download_failed"}
+    faces = fa.get(img)
+    if not faces:
+        return {"ok": True, "detections": []}
+    embs = np.stack([l2n(f.normed_embedding.astype("float32")) for f in faces]).astype("float32")
+    bboxes = [[int(f.bbox[0]), int(f.bbox[1]), int(f.bbox[2]-f.bbox[0]), int(f.bbox[3]-f.bbox[1])] for f in faces]
+    names, confs = [], []
+    if people:
+        if HAS_FAISS and index is not None and index.ntotal > 0:
+            sims, ids = index.search(embs, 1)
+            for i in range(len(faces)):
+                sim = float(sims[i][0]); best = int(ids[i][0])
+                names.append(people[best]["name"] if sim >= threshold else "Unknown")
+                confs.append(sim)
+        else:
+            gallery = np.stack([p["embedding"] for p in people]).astype("float32")
+            sims = embs @ gallery.T
+            best_ids = np.argmax(sims, axis=1)
+            best_sims = sims[np.arange(len(faces)), best_ids]
+            for sim, bid in zip(best_sims, best_ids):
+                sim = float(sim)
+                names.append(people[bid]["name"] if sim >= threshold else "Unknown")
+                confs.append(sim)
+    dets = [{"bbox": bboxes[i], "name": names[i], "conf": float(confs[i])} for i in range(len(faces))]
+    return {"ok": True, "detections": dets}
+
+@app.get("/debug/recognize_latest")
+def debug_recognize_latest(name: str = Query(..., description="Firestore person name"), threshold: float = THRESH):
+    if not HAS_FIRESTORE or not firestore_service:
+        return {"ok": False, "reason": "firestore_disabled"}
+    pdata = firestore_service.get_person_data(name)
+    if not pdata or not pdata.get("photos"):
+        return {"ok": False, "reason": "no_photos"}
+    url = pdata["photos"][-1].get("photoURL")
+    if not url:
+        return {"ok": False, "reason": "no_url"}
+    return recognize_from_url(RecognizeFromUrlBody(url=url), threshold=threshold)
+
+@app.get("/people")
+async def get_all_people():
+    """Get list of all people in the database"""
+    if not HAS_FIRESTORE or not firestore_service:
+        return {"people": [p["name"] for p in people]}  # Fallback to local gallery
+    
+    try:
+        people_list = firestore_service.get_all_people()
+        return {"people": people_list}
+    except Exception as e:
+        print(f"❌ Error fetching people list: {e}")
+        return {"people": []}
 
 @app.post("/recognize")
 async def recognize(image: UploadFile = File(...), threshold: float = THRESH):
@@ -385,3 +795,32 @@ async def recognize_fast(
     payload = {"detections": [det]}
     _last_fast.update(time=tnow, payload=payload)
     return payload
+
+# ---------- Debug endpoints ----------
+@app.get("/debug/firestore/benchmark")
+def debug_firestore_benchmark(name: str | None = None, trials: int = 3):
+    if not HAS_FIRESTORE or not firestore_service:
+        return {"ok": False, "reason": "firestore_disabled"}
+    out = {"ok": True, "name": name, "trials": trials, "runs": []}
+    # Benchmark get_all_people as a baseline
+    t0 = time.time(); ppl = firestore_service.get_all_people(); t_all_ms = int((time.time() - t0) * 1000)
+    out["all_people_ms"] = t_all_ms
+    out["people_count"] = len(ppl)
+    # Benchmark specific person if provided or first
+    target = name if name else (ppl[0] if ppl else None)
+    if target:
+        for i in range(trials):
+            t1 = time.time(); data = firestore_service.get_person_data(target); dt_ms = int((time.time() - t1) * 1000)
+            out["runs"].append({"i": i, "ms": dt_ms, "found": bool(data)})
+    return out
+
+@app.get("/debug/cache/stats")
+def debug_cache_stats():
+    if not HAS_FIRESTORE or not firestore_service:
+        return {"ok": False, "reason": "firestore_disabled"}
+    stats = firestore_service.cache_stats()
+    return {"ok": True, "stats": stats}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
