@@ -70,8 +70,8 @@ app.post("/enhance-description", (req, res) => {
       s = s.replace(/\s+/g, " ").trim();
       // Remove trailing "with ..." to avoid "with with"
       s = s.replace(/\bwith\b.*$/i, "").trim();
-  // Drop any trailing commas and a trailing 'and'/'&'
-  s = s.replace(/[,:;]+$/g, "").replace(/\b(?:and|&)\s*$/i, "").trim();
+      // Drop any trailing commas and a trailing 'and'/'&'
+      s = s.replace(/[,:;]+$/g, "").replace(/\b(?:and|&)\s*$/i, "").trim();
       // If empty after cleanup, skip
       if (!s) continue;
       const key = s.toLowerCase();
@@ -81,29 +81,40 @@ app.post("/enhance-description", (req, res) => {
       }
     }
 
-    // 3) Compose a single concise sentence
-    let enhancedDescription: string;
-    if (cleaned.length === 0) {
-      enhancedDescription = `A cherished memory with ${nameDisplay}.`;
-    } else if (cleaned.length === 1) {
-      const a = cleaned[0];
-      // If phrase already includes the person's name (rare), don't add another "with {name}"
-      if (new RegExp(`\\b${nameLc}\\b`, 'i').test(a)) {
-        enhancedDescription = `${capitalizeFirst(a)}.`;
-      } else {
-        enhancedDescription = `${capitalizeFirst(a)} with ${nameDisplay}.`;
-      }
-    } else {
-      const a = cleaned[cleaned.length - 2];
-      const b = cleaned[cleaned.length - 1];
-      // Join last two unique activities for freshness
-      const body = `${a} and ${b}`;
-      if (new RegExp(`\\b${nameLc}\\b`, 'i').test(body)) {
-        enhancedDescription = `${capitalizeFirst(body)}.`;
-      } else {
-        enhancedDescription = `${capitalizeFirst(body)} with ${nameDisplay}.`;
-      }
+    // 3) Compose 2–3 sentences using metadata (name, relation, last activities)
+    const rel = (relation || "").trim();
+    const relationText = rel ? `, your ${rel.toLowerCase()}` : "";
+    const opening = `This is ${nameDisplay}${relationText}.`;
+
+    function startsWithGerund(s: string): boolean {
+      const first = (s.trim().split(/\s+/)[0] || "").toLowerCase();
+      return /ing$/.test(first);
     }
+
+    function buildActivitySentence(items: string[]): string {
+      if (items.length === 0) return "You shared a special moment together.";
+      if (items.length === 1) {
+        const a = items[0];
+        const core = a.trim();
+        const together = /\btogether\b/i.test(core) ? "" : " together";
+        const body = startsWithGerund(core) ? `were ${core}` : core;
+        return capitalizeFirst(`You ${body}${together}.`);
+      }
+      // Use the last two unique activities for freshness
+      const a = items[items.length - 2].trim();
+      const b = items[items.length - 1].trim();
+      const bothGerund = startsWithGerund(a) && startsWithGerund(b);
+      const joined = `${a} and ${b}`;
+      const together = /\btogether\b/i.test(joined) ? "" : " together";
+      const body = bothGerund ? `were ${joined}` : joined;
+      return capitalizeFirst(`You ${body}${together}.`);
+    }
+
+    const activitySentence = buildActivitySentence(cleaned);
+    // Optional closer to make it warm but concise
+    const closer = cleaned.length > 0 ? "It\'s a memory you both cherish." : "A cherished moment to remember.";
+
+    const enhancedDescription = `${opening} ${activitySentence} ${closer}`.trim();
 
     res.json({ enhancedDescription });
   } catch (error) {
