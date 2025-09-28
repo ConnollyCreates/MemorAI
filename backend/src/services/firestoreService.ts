@@ -229,3 +229,65 @@ export async function getPhotosForPerson(name: string): Promise<any[]> {
         throw error;
     }
 }
+
+// Delete a single photo document under a person
+export async function deletePhoto(name: string, photoId: string): Promise<boolean> {
+    try {
+        const accessToken = await getAccessToken();
+        const photoDocUrl = `${FIRESTORE_BASE_URL}/people/${name}/photos/${photoId}`;
+
+        const response = await fetch(photoDocUrl, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+            }
+        });
+
+        if (response.ok || response.status === 404) {
+            // 404 = already deleted, treat as success for idempotency
+            console.log(`🗑️ Deleted photo '${photoId}' for '${name}' (status ${response.status}).`);
+            return true;
+        }
+        const text = await response.text();
+        console.error(`❌ Failed to delete photo '${photoId}' for '${name}':`, response.status, text);
+        return false;
+    } catch (error) {
+        console.error(`❌ Error deleting photo '${photoId}' for '${name}':`, error);
+        return false;
+    }
+}
+
+// Delete person: remove all photos in subcollection, then remove person doc
+export async function deletePerson(name: string): Promise<boolean> {
+    try {
+        const accessToken = await getAccessToken();
+        // List photos and delete each
+        const photos = await getPhotosForPerson(name);
+        let deletedCount = 0;
+        for (const p of photos) {
+            const ok = await deletePhoto(name, p.id);
+            if (ok) deletedCount++;
+        }
+        console.log(`🧹 Deleted ${deletedCount}/${photos.length} photos for '${name}'.`);
+
+        // Delete the person document itself
+        const personDocUrl = `${FIRESTORE_BASE_URL}/people/${name}`;
+        const response = await fetch(personDocUrl, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+            }
+        });
+
+        if (response.ok || response.status === 404) {
+            console.log(`🗑️ Deleted person '${name}' (status ${response.status}).`);
+            return true;
+        }
+        const text = await response.text();
+        console.error(`❌ Failed to delete person '${name}':`, response.status, text);
+        return false;
+    } catch (error) {
+        console.error(`❌ Error deleting person '${name}':`, error);
+        return false;
+    }
+}
