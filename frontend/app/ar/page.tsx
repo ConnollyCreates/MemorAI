@@ -31,26 +31,6 @@ type Detection = {
   };
 };
 
-function speak(text: string) {
-  if (AZURE_KEY && AZURE_REGION) {
-    const cfg = sdk.SpeechConfig.fromSubscription(AZURE_KEY, AZURE_REGION);
-    cfg.speechSynthesisVoiceName = "en-US-JennyNeural";
-    const audio = sdk.AudioConfig.fromDefaultSpeakerOutput();
-    const synth = new sdk.SpeechSynthesizer(cfg, audio);
-    synth.speakTextAsync(
-      text,
-      () => synth.close(),
-      (e) => {
-        console.error("Azure TTS error", e);
-        synth.close();
-      }
-    );
-  } else if ("speechSynthesis" in window) {
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
-  }
-}
-
 // scale (sendW/sendH -> canvas W/H)
 function scaleBBox(
   [x, y, w, h]: number[],
@@ -117,10 +97,113 @@ export default function ARPage() {
 
   // cooldowns for TTS + name change tracking
   const lastSpeakAt = useRef(0);
+  const isSpeaking = useRef(false); // Prevent simultaneous speech
   const lastNameShown = useRef<string>("Unknown");
 
   // snap-side card + throttled Y nudge
   const cardSideRef = useRef<"left" | "right">("right");
+
+  // TTS function with duplication prevention
+  const speak = (text: string) => {
+    console.log("🗣️ Speaking:", text); // Debug log
+    
+    if (isSpeaking.current) {
+      console.log("🔇 Speech already in progress, skipping:", text);
+      return;
+    }
+    
+    isSpeaking.current = true;
+    
+    if (AZURE_KEY && AZURE_REGION) {
+      console.log("Using Azure TTS with AriaNeural voice");
+      const cfg = sdk.SpeechConfig.fromSubscription(AZURE_KEY, AZURE_REGION);
+      // Use a warmer, more conversational voice suitable for elderly users
+      cfg.speechSynthesisVoiceName = "en-US-AriaNeural";
+      const audio = sdk.AudioConfig.fromDefaultSpeakerOutput();
+      const synth = new sdk.SpeechSynthesizer(cfg, audio);
+      
+      // Add SSML for better prosody control
+      const ssmlText = `<speak version="1.0" xml:lang="en-US">
+        <voice name="en-US-AriaNeural">
+          <prosody rate="0.8" pitch="+10%" volume="soft">${text}</prosody>
+        </voice>
+      </speak>`;
+      
+      synth.speakSsmlAsync(
+        ssmlText,
+        () => {
+          console.log("Azure TTS completed");
+          isSpeaking.current = false;
+          synth.close();
+        },
+        (e) => {
+          console.error("Azure TTS error", e);
+          isSpeaking.current = false;
+          synth.close();
+        }
+      );
+    } else {
+      console.log("Using browser TTS (Azure not configured)");
+      window.speechSynthesis.cancel();
+      
+      // Function to speak with proper voice loading
+      const speakWithVoice = () => {
+        const utterance = new SpeechSynthesisUtterance(text);
+        // Make browser TTS more pleasant
+        utterance.rate = 0.65; // Much slower for elderly users
+        utterance.pitch = 1.3; // Higher pitch for friendlier tone  
+        utterance.volume = 0.9;
+        
+        // Set speaking flag to false when done
+        utterance.onend = () => {
+          console.log("Browser TTS completed");
+          isSpeaking.current = false;
+        };
+        utterance.onerror = () => {
+          console.log("Browser TTS error");
+          isSpeaking.current = false;
+        };
+        
+        // Try to get a better voice if available
+        const voices = window.speechSynthesis.getVoices();
+        console.log("Available voices:", voices.map(v => v.name));
+        
+        // Look for premium/natural voices first
+        const preferredVoices = voices.filter(v => 
+          v.name.includes('Samantha') || 
+          v.name.includes('Alex') || 
+          v.name.includes('Karen') ||
+          v.name.includes('Zira') ||
+          v.name.includes('Susan') ||
+          v.name.includes('Enhanced') ||
+          (v.name.includes('Female') && v.lang.startsWith('en')) ||
+          (v.lang.startsWith('en-US') && v.localService && v.name.includes('Premium'))
+        );
+        
+        if (preferredVoices.length > 0) {
+          utterance.voice = preferredVoices[0];
+          console.log("Using voice:", preferredVoices[0].name);
+        } else if (voices.length > 0) {
+          // Fallback to any English voice
+          const englishVoices = voices.filter(v => v.lang.startsWith('en'));
+          if (englishVoices.length > 0) {
+            utterance.voice = englishVoices[0];
+            console.log("Using fallback voice:", englishVoices[0].name);
+          }
+        }
+        
+        window.speechSynthesis.speak(utterance);
+      };
+      
+      // Ensure voices are loaded before speaking
+      if (window.speechSynthesis.getVoices().length === 0) {
+        console.log("Waiting for voices to load...");
+        window.speechSynthesis.addEventListener('voiceschanged', speakWithVoice, { once: true });
+      } else {
+        speakWithVoice();
+      }
+    }
+  };
   const cardElRef = useRef<HTMLDivElement | null>(null);
   const lastCardYUpdate = useRef(0);
   // New: flip cooldown to avoid rapid toggling
@@ -338,7 +421,7 @@ export default function ARPage() {
           .filter((d) => d.name !== "Unknown")
           .sort((a, b) => (b.conf ?? 0) - (a.conf ?? 0))[0];
 
-        const speakCooldownMs = 1200;
+        const speakCooldownMs = 3000; // Increase cooldown to 3 seconds to prevent duplicates
 
         // Avoid covering face: flip or nudge card when too close/overlapping
         if (best) {
@@ -427,6 +510,15 @@ export default function ARPage() {
         }
 
         if (best && best.name !== lastNameShown.current) {
+          console.log("🔍 New person recognized:", best.name, "has memory_card:", !!best.memory_card);
+          console.log("📊 Recognition details:", {
+            name: best.name,
+            confidence: best.conf,
+            track_id: best.track_id,
+            lastNameShown: lastNameShown.current,
+            timeSinceLastSpeak: nowMs - lastSpeakAt.current
+          });
+          
           lastNameShown.current = best.name;
           safeSetStatus("recognized");
           setCurrentName(best.name);
@@ -434,6 +526,7 @@ export default function ARPage() {
 
           // Use memory card data from CV service if available
           if (best.memory_card) {
+            console.log("📝 Using CV memory card data");
             const memCard = best.memory_card;
             setCaption(memCard.activity || `A favorite memory with ${best.name}.`);
             setRelationship(memCard.relation || "");
@@ -442,12 +535,17 @@ export default function ARPage() {
             console.log("✅ Memory card data loaded from CV service:", memCard);
 
             if (nowMs - lastSpeakAt.current > speakCooldownMs) {
+              console.log("🎵 Speaking CV path - time since last:", nowMs - lastSpeakAt.current, "ms");
               lastSpeakAt.current = nowMs;
               const relationText = memCard.relation ? `, your ${memCard.relation.toLowerCase()}` : "";
-              const activityText = memCard.activity ? `, ${memCard.activity}` : "";
-              speak(`This is ${best.name}${relationText}${activityText}`);
+              const activityText = memCard.activity ? `. ${memCard.activity}` : "";
+              // Remove "This is" to match backend consistency and sound more natural
+              speak(`${best.name}${relationText}${activityText}`);
+            } else {
+              console.log("🔇 CV speech cooldown active, skipping");
             }
           } else {
+            console.log("🔄 Using backend fallback (no CV memory card)");
             // Fallback to backend API if no memory card data from CV
             try {
               const q = await fetch(
@@ -472,9 +570,13 @@ export default function ARPage() {
                 setPhotosCount(urls.length);
 
                 if (nowMs - lastSpeakAt.current > speakCooldownMs) {
+                  console.log("🎵 Speaking backend path - time since last:", nowMs - lastSpeakAt.current, "ms");
                   lastSpeakAt.current = nowMs;
                   const relationText = rel ? `, your ${rel.toLowerCase()}` : "";
-                  speak(`This is ${best.name}${relationText}, ${cap}`);
+                  // Avoid duplication - use different phrasing for backend fallback
+                  speak(`${best.name}${relationText}. ${cap}`);
+                } else {
+                  console.log("🔇 Backend speech cooldown active, skipping");
                 }
               } else {
                 setCaption("");
