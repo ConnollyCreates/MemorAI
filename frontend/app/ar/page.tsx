@@ -16,6 +16,19 @@ type Detection = {
   bbox: [number, number, number, number]; // [x,y,w,h] in SEND space
   name: string;
   conf: number;
+  memory_card?: {
+    name: string;
+    relation: string;
+    photo_count: number;
+    most_recent_photo: string | null;
+    photos: Array<{
+      id: string;
+      photoURL: string;
+      photoDescription: string;
+      uploadedAt: string;
+    }>;
+    activity: string;
+  };
 };
 
 function speak(text: string) {
@@ -114,7 +127,7 @@ export default function ARPage() {
   const lastFlipAtRef = useRef(0);
 
   // tuning knobs
-  const ACCEPT_CONF = 0.62; // show immediately when >= this confidence
+  const ACCEPT_CONF = 0.35; // lowered to match CV service threshold
   const HOLD_MS = 500; // keep last name briefly when it flickers to Unknown
   const MAJ_WIN = 2; // 2-frame majority for quick lock
 
@@ -194,7 +207,7 @@ export default function ARPage() {
       const myReqId = ++reqCounter.current;
 
       try {
-        const r = await fetch(`${CV}/recognize`, { method: "POST", body: form });
+        const r = await fetch(`${CV}/recognize_with_memory`, { method: "POST", body: form });
         if (!r.ok) {
           if (myReqId > lastHandledReq.current) {
             safeSetStatus(`cv-http-${r.status}`);
@@ -406,43 +419,62 @@ export default function ARPage() {
           setCurrentName(best.name);
           setConfidence(best.conf ?? 0);
 
-          try {
-            const q = await fetch(
-              `${API}/memories?personId=${encodeURIComponent(best.name)}`
-            );
-            if (q.ok) {
-              const j = await q.json();
-              const item = j?.item || j || {};
+          // Use memory card data from CV service if available
+          if (best.memory_card) {
+            const memCard = best.memory_card;
+            setCaption(memCard.activity || `A favorite memory with ${best.name}.`);
+            setRelationship(memCard.relation || "");
+            setPhotoUrl(memCard.most_recent_photo || undefined);
+            setPhotosCount(memCard.photo_count);
+            console.log("✅ Memory card data loaded from CV service:", memCard);
 
-              const cap =
-                item.caption || `A favorite memory with ${best.name}.`;
-              const rel = item.relationship || "";
-              const urls: string[] =
-                item.photoUrls ||
-                item.photos ||
-                (item.photoUrl ? [item.photoUrl] : []) ||
-                [];
+            if (nowMs - lastSpeakAt.current > speakCooldownMs) {
+              lastSpeakAt.current = nowMs;
+              const relationText = memCard.relation ? `, your ${memCard.relation.toLowerCase()}` : "";
+              const activityText = memCard.activity ? `, ${memCard.activity}` : "";
+              speak(`This is ${best.name}${relationText}${activityText}`);
+            }
+          } else {
+            // Fallback to backend API if no memory card data from CV
+            try {
+              const q = await fetch(
+                `${API}/memories?personId=${encodeURIComponent(best.name)}`
+              );
+              if (q.ok) {
+                const j = await q.json();
+                const item = j?.item || j || {};
 
-              setCaption(cap);
-              setRelationship(rel);
-              setPhotoUrl(urls[0]);
-              setPhotosCount(urls.length);
+                const cap =
+                  item.caption || `A favorite memory with ${best.name}.`;
+                const rel = item.relationship || "";
+                const urls: string[] =
+                  item.photoUrls ||
+                  item.photos ||
+                  (item.photoUrl ? [item.photoUrl] : []) ||
+                  [];
 
-              if (nowMs - lastSpeakAt.current > speakCooldownMs) {
-                lastSpeakAt.current = nowMs;
-                speak(`This is ${best.name}. ${cap}`);
+                setCaption(cap);
+                setRelationship(rel);
+                setPhotoUrl(urls[0]);
+                setPhotosCount(urls.length);
+
+                if (nowMs - lastSpeakAt.current > speakCooldownMs) {
+                  lastSpeakAt.current = nowMs;
+                  const relationText = rel ? `, your ${rel.toLowerCase()}` : "";
+                  speak(`This is ${best.name}${relationText}, ${cap}`);
+                }
+              } else {
+                setCaption("");
+                setRelationship("");
+                setPhotoUrl(undefined);
+                setPhotosCount(undefined);
               }
-            } else {
+            } catch {
               setCaption("");
               setRelationship("");
               setPhotoUrl(undefined);
               setPhotosCount(undefined);
             }
-          } catch {
-            setCaption("");
-            setRelationship("");
-            setPhotoUrl(undefined);
-            setPhotosCount(undefined);
           }
         } else if (!best && lastNameShown.current !== "Unknown") {
           lastNameShown.current = "Unknown";

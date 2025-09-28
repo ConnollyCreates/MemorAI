@@ -30,6 +30,81 @@ app.get("/memories", (req, res) => {
   });
 });
 
+// Enhanced description endpoint for CV service
+app.post("/enhance-description", (req, res) => {
+  try {
+    const { name, relation, photos } = req.body as { name?: string; relation?: string; photos?: Array<{ photoDescription?: string }>; };
+
+    if (!name || !photos || !Array.isArray(photos)) {
+      return res.status(400).json({ error: 'Missing required fields: name and photos array' });
+    }
+
+    const nameLc = String(name).trim();
+    const nameDisplay = nameLc.charAt(0).toUpperCase() + nameLc.slice(1);
+
+    // 1) Gather up to last 3 non-empty descriptions
+    const rawDescs = photos
+      .map(p => (p?.photoDescription ?? "").trim())
+      .filter(Boolean)
+      .slice(-3);
+
+    // 2) Normalize/sanitize phrases
+    const cleaned: string[] = [];
+    const seen = new Set<string>(); // for de-duplication (case-insensitive)
+    for (const d of rawDescs) {
+      // Remove trailing punctuation
+      let s = d.replace(/[.!?]+$/g, "");
+      // Collapse whitespace
+      s = s.replace(/\s+/g, " ").trim();
+      // Remove trailing "with ..." to avoid "with with"
+      s = s.replace(/\bwith\b.*$/i, "").trim();
+  // Drop any trailing commas and a trailing 'and'/'&'
+  s = s.replace(/[,:;]+$/g, "").replace(/\b(?:and|&)\s*$/i, "").trim();
+      // If empty after cleanup, skip
+      if (!s) continue;
+      const key = s.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        cleaned.push(s);
+      }
+    }
+
+    // 3) Compose a single concise sentence
+    let enhancedDescription: string;
+    if (cleaned.length === 0) {
+      enhancedDescription = `A cherished memory with ${nameDisplay}.`;
+    } else if (cleaned.length === 1) {
+      const a = cleaned[0];
+      // If phrase already includes the person's name (rare), don't add another "with {name}"
+      if (new RegExp(`\\b${nameLc}\\b`, 'i').test(a)) {
+        enhancedDescription = `${capitalizeFirst(a)}.`;
+      } else {
+        enhancedDescription = `${capitalizeFirst(a)} with ${nameDisplay}.`;
+      }
+    } else {
+      const a = cleaned[cleaned.length - 2];
+      const b = cleaned[cleaned.length - 1];
+      // Join last two unique activities for freshness
+      const body = `${a} and ${b}`;
+      if (new RegExp(`\\b${nameLc}\\b`, 'i').test(body)) {
+        enhancedDescription = `${capitalizeFirst(body)}.`;
+      } else {
+        enhancedDescription = `${capitalizeFirst(body)} with ${nameDisplay}.`;
+      }
+    }
+
+    res.json({ enhancedDescription });
+  } catch (error) {
+    console.error('Enhanced description error:', error);
+    res.status(500).json({ error: 'Failed to generate enhanced description' });
+  }
+});
+
+function capitalizeFirst(s: string): string {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 // Photo upload endpoint
 app.post("/api/upload-photo", upload.single('photo'), async (req, res) => {
   try {
