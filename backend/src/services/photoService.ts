@@ -4,6 +4,7 @@
 
 // Import Azure storage functions
 import { uploadPhotoAndGetUrl, testAzureConnection } from './storage';
+import { syncGalleryFromFirestore } from './vision';
 
 // Import Firestore functions  
 const { addPhotoEntry, getPhotosForPerson } = require('./firestoreService');
@@ -35,11 +36,24 @@ export async function uploadPhotoWithMetadata(data: PhotoUploadData): Promise<Ph
             return { success: false, error: "Failed to upload photo to Azure" };
         }
 
-                // Try Firestore save with REST API
+        // Try Firestore save with REST API
         console.log('🔥 Attempting Firestore save with REST API...');
         try {
             const photoID = await addPhotoEntry(normalizedName, data.relation, data.photoDescription, photoUrl);
             console.log('✅ Firestore REST API save successful!');
+
+            // Trigger CV service gallery sync, verify the uploaded person appears
+            const syncResult = await syncGalleryFromFirestore(4, 800, normalizedName);
+            if (!syncResult.ok) {
+                console.warn('⚠️ CV service gallery sync reported failure after upload:', syncResult);
+            } else {
+                console.log('🧠 CV service gallery sync ok:', {
+                    present: (syncResult.synced_names || []).includes(normalizedName),
+                    names: syncResult.synced_names || [],
+                    errors: syncResult.errors || []
+                });
+            }
+
             return { 
                 success: true, 
                 photoUrl: photoUrl, 
