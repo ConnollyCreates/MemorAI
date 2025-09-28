@@ -6,7 +6,8 @@
 import { uploadPhotoAndGetUrl, testAzureConnection } from './storage';
 
 // Import Firestore functions  
-import { addPhotoEntry, getPhotosForPerson } from './firestoreService';
+const { addPhotoEntry, getPhotosForPerson } = require('./firestoreService');
+
 
 // Types for our helper functions
 export interface PhotoUploadData {
