@@ -162,7 +162,8 @@ export default function ARPage() {
         });
         if (!running) return;
 
-        const video = videoRef.current!;
+        const video = videoRef.current;
+        if (!video) return;
         video.srcObject = stream;
         await video.play();
         safeSetStatus("camera-on");
@@ -193,7 +194,11 @@ export default function ARPage() {
         sendCanvas.width = sendW;
         sendCanvas.height = sendH;
       }
-      const sctx = sendCanvas.getContext("2d")!;
+      const sctx = sendCanvas.getContext("2d");
+      if (!sctx) {
+        scheduleNext();
+        return;
+      }
       sctx.drawImage(video, 0, 0, sendW, sendH);
 
       const blob: Blob = await new Promise((res) =>
@@ -237,12 +242,20 @@ export default function ARPage() {
         const dets = Array.isArray(data?.detections) ? data.detections : [];
 
         // prep overlay canvas (resize only when needed)
-        const canvas = overlayRef.current!;
+        const canvas = overlayRef.current;
+        if (!canvas) {
+          scheduleNext();
+          return;
+        }
         if (canvas.width !== vW || canvas.height !== vH) {
           canvas.width = vW;
           canvas.height = vH;
         }
-        const ctx = canvas.getContext("2d")!;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          scheduleNext();
+          return;
+        }
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
         // --- Fast stabilization: early-accept + hysteresis ---
