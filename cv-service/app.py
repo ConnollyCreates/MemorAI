@@ -50,52 +50,88 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
 
 def generate_memory_description(person_name: str, relationship: str, photos: list) -> str:
-    """Generate a sentimental memory description using Gemini AI"""
-    if not GEMINI_API_KEY:
-        return f"A cherished memory with {person_name}."
-    
+    """Generate a 2–3 sentence memory description.
+    Prefers Gemini; falls back to deterministic composition using recent photo descriptions.
+    """
+    # Build up to last 3 activity snippets from photo metadata
+    recent = []
     try:
-        # Build context from photos
-        photo_contexts = []
-        for photo in photos[-3:]:  # Use last 3 photos
-            desc = photo.get("photoDescription", "")
-            if desc:
-                photo_contexts.append(desc)
-        
-        context = f"Person: {person_name} ({relationship})\n"
-        if photo_contexts:
-            context += f"Recent memories: {'; '.join(photo_contexts)}\n"
-        
-        prompt = f"""Based on this information about {person_name}, create a short, warm, sentimental message (1-2 sentences) that would be meaningful to display when someone sees them:
+        for photo in photos[-3:]:
+            desc = (photo or {}).get("photoDescription", "")
+            if not isinstance(desc, str):
+                continue
+            s = desc.strip()
+            if not s:
+                continue
+            # Normalize similar to backend
+            s = s.replace(r"[.!?]+$", "") if s else s
+            s = " ".join(s.split()).strip()
+            if s:
+                recent.append(s)
+    except Exception:
+        pass
 
-{context}
+    # If Gemini key present, try LLM generation first
+    if GEMINI_API_KEY:
+        try:
+            parts = []
+            parts.append(f"Person: {person_name} ({relationship})")
+            if recent:
+                parts.append(f"Recent memories: {'; '.join(recent)}")
+            context = "\n".join(parts)
+            prompt = (
+                f"Based on this information about {person_name}, create a short, warm, sentimental message "
+                "(2-3 sentences) that builds on the activities and relationship. Keep it under 50 words.\n\n"
+                f"{context}\n\n"
+                "Use present-friendly phrasing (e.g., 'This is Chris, your son... You were playing Valorant together.')."
+            )
+            payload = {"contents": [{"parts": [{"text": prompt}]}]}
+            headers = {"Content-Type": "application/json"}
+            response = pyreq.post(
+                f"{GEMINI_URL}?key={GEMINI_API_KEY}",
+                json=payload,
+                headers=headers,
+                timeout=10,
+                verify=_VERIFY_PARAM
+            )
+            if response.status_code == 200:
+                data = response.json()
+                if "candidates" in data and data["candidates"]:
+                    text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    if 0 < len(text) <= 220:
+                        return text
+        except Exception as e:
+            print(f"[warn] Gemini API error for {person_name}: {e}")
 
-Make it personal and heartwarming, focusing on the relationship and shared memories. Keep it under 50 words."""
+    # Deterministic fallback builder (no network)
+    def cap(s: str) -> str:
+        return s[:1].upper() + s[1:] if s else s
 
-        payload = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }]
-        }
-        
-        headers = {"Content-Type": "application/json"}
-        response = pyreq.post(
-            f"{GEMINI_URL}?key={GEMINI_API_KEY}",
-            json=payload,
-            headers=headers,
-            timeout=10,
-            verify=_VERIFY_PARAM
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            if "candidates" in data and data["candidates"]:
-                text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                return text if len(text) < 200 else f"A cherished memory with {person_name}."
-    except Exception as e:
-        print(f"[warn] Gemini API error for {person_name}: {e}")
-    
-    return f"A cherished memory with {person_name}."
+    rel = (relationship or "").strip()
+    rel_text = f", your {rel.lower()}" if rel else ""
+    opening = f"This is {person_name}{rel_text}."
+
+    def starts_gerund(s: str) -> bool:
+        first = (s.strip().split()[0] if s.strip() else "").lower()
+        return first.endswith("ing")
+
+    def activity_sentence(items: List[str]) -> str:
+        if not items:
+            return "You shared a special moment together."
+        if len(items) == 1:
+            core = items[0]
+            together = "" if (" together" in core.lower() or "together " in core.lower()) else " together"
+            body = f"were {core}" if starts_gerund(core) else core
+            return cap(f"You {body}{together}.")
+        a, b = items[-2], items[-1]
+        joined = f"{a} and {b}"
+        both = starts_gerund(a) and starts_gerund(b)
+        together = "" if "together" in joined.lower() else " together"
+        body = f"were {joined}" if both else joined
+        return cap(f"You {body}{together}.")
+
+    closer = "It's a memory you both cherish."
+    return f"{opening} {activity_sentence(recent)} {closer}"
 
 # ---------- InsightFace ----------
 fa = None
