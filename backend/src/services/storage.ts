@@ -2,17 +2,25 @@ import { BlobServiceClient, StorageSharedKeyCredential } from '@azure/storage-bl
 import dotenv from 'dotenv';
 import path from 'path';
 
-// Load environment variables - this works from any computer
-dotenv.config({ path: path.join(process.cwd(), '.env') });
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+// Load environment variables from the backend `src` directory where your .env file lives
+// This ensures ts-node-dev (which may run with different cwd) still picks up the file.
+const envPath = path.resolve(__dirname, '../.env');
+dotenv.config({ path: envPath });
+
+// Debug presence (do NOT log secret values)
+console.log('[env debug] loading .env from', envPath);
+console.log('[env debug] AZURE_STORAGE_ACCOUNT_NAME present?', !!process.env.AZURE_STORAGE_ACCOUNT_NAME);
+console.log('[env debug] AZURE_STORAGE_ACCESS_KEY present?', !!process.env.AZURE_STORAGE_ACCESS_KEY);
 
 // Get Azure credentials from environment variables
 const AZURE_STORAGE_ACCOUNT_NAME = process.env.AZURE_STORAGE_ACCOUNT_NAME;
 const AZURE_STORAGE_ACCESS_KEY = process.env.AZURE_STORAGE_ACCESS_KEY;
 const CONTAINER_NAME = process.env.AZURE_CONTAINER_NAME;
 
-// Validate required environment variables
+// Validate required environment variables (fail fast with informative message)
 if (!AZURE_STORAGE_ACCOUNT_NAME || !AZURE_STORAGE_ACCESS_KEY) {
+    console.error('Missing required Azure Storage credentials in environment variables.');
+    console.error('Make sure backend/src/.env contains AZURE_STORAGE_ACCOUNT_NAME and AZURE_STORAGE_ACCESS_KEY.');
     throw new Error('Missing required Azure Storage credentials in environment variables');
 }
 

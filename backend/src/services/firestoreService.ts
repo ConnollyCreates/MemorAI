@@ -22,6 +22,7 @@ const FIRESTORE_BASE_URL = `https://firestore.googleapis.com/v1/projects/${PROJE
 // Simple JWT token generation for service account authentication
 import { sign } from 'jsonwebtoken';
 
+
 async function getAccessToken(): Promise<string> {
     try {
         // Use Google's OAuth2 service with a simpler approach

@@ -1,15 +1,20 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-import numpy as np, cv2, os, time, json
-from typing import List, Dict
+import numpy as np, cv2, os, time, json, requests
+from typing import List, Dict, Tuple
 from insightface.app import FaceAnalysis
 
 # ---------- Config ----------
-THRESH      = float(os.getenv("THRESHOLD", "0.60"))   # ID threshold (cosine on L2-normed)
-DET_THRESH  = float(os.getenv("DET_THRESHOLD", "0.38")) # Detector conf threshold
-DIM         = 512
-THROTTLE_MS = float(os.getenv("FAST_THROTTLE_MS", "250"))
-ROI_MARGIN  = float(os.getenv("ROI_MARGIN", "0.25"))
+THRESH       = float(os.getenv("THRESHOLD", "0.60"))     # cosine threshold
+DET_THRESH   = float(os.getenv("DET_THRESHOLD", "0.38")) # detector conf
+DIM          = 512
+THROTTLE_MS  = float(os.getenv("FAST_THROTTLE_MS", "250"))
+ROI_MARGIN   = float(os.getenv("ROI_MARGIN", "0.25"))
+GALLERY_PATH = os.getenv("GALLERY_PATH", "gallery.json")
+BACKEND_GALLERY_EXPORT = os.getenv(
+    "BACKEND_GALLERY_EXPORT",
+    "http://127.0.0.1:4000/cv/gallery/export"
+)
 
 # ---------- App / CORS ----------
 app = FastAPI()
@@ -23,12 +28,10 @@ app.add_middleware(
 
 # ---------- InsightFace ----------
 fa = FaceAnalysis(name="buffalo_l")
-# CPU
 fa.prepare(ctx_id=-1, det_thresh=DET_THRESH, det_size=(320, 320))
 
 # ---------- Gallery / FAISS ----------
 people: List[Dict] = []  # [{id,name,relationship,embedding: np.ndarray}]
-GALLERY_PATH = os.getenv("GALLERY_PATH", "gallery.json")
 try:
     import faiss
     HAS_FAISS = True
@@ -87,9 +90,35 @@ def load_people():
     except Exception as e:
         print("[warn] failed to load gallery:", e)
 
-def read_image(up: UploadFile) -> np.ndarray:
-    data = np.frombuffer(up.file.read(), np.uint8); up.file.seek(0)
-    return cv2.imdecode(data, cv2.IMREAD_COLOR)
+# ----- Pull gallery from backend (Firestore via Node) -----
+def pull_gallery_from_backend() -> Tuple[bool, int]:
+    global people
+    try:
+        r = requests.get(BACKEND_GALLERY_EXPORT, timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        loaded = []
+        for i, p in enumerate(data.get("people", [])):
+            emb = np.array(p["embedding"], dtype="float32")
+            emb = l2n(emb)  # defensive renorm
+            loaded.append({
+                "id": p.get("id", f"p_{i}"),
+                "name": p["name"],
+                "relationship": p.get("relationship", ""),
+                "embedding": emb,
+            })
+        people = loaded
+        rebuild_index()
+        print(f"[gallery] synced {len(people)} people from backend")
+        return True, len(people)
+    except Exception as e:
+        print("[gallery] sync failed:", e)
+        return False, 0
+
+# Initial load: try backend, fall back to local file
+ok, _ = pull_gallery_from_backend()
+if not ok:
+    load_people()
 
 # ---------- Tiny IoU Tracker ----------
 TRACKS: Dict[int, Dict] = {}
@@ -136,6 +165,37 @@ def assign_tracks(dets: List[Dict]) -> List[Dict]:
     return dets
 
 # ---------- Endpoints ----------
+@app.get("/health")
+def health():
+    det_size = getattr(fa.models["detector"][1], "input_size", (None, None))
+    return {
+        "ok": True,
+        "people": len(people),
+        "faiss": bool(HAS_FAISS and index is not None and (index.ntotal if people else 0)),
+        "threshold": THRESH,
+        "det_thresh": DET_THRESH,
+        "det_size": det_size,
+        "backend_gallery": BACKEND_GALLERY_EXPORT,
+    }
+
+@app.post("/gallery/sync")
+def gallery_sync():
+    ok, n = pull_gallery_from_backend()
+    return {"ok": ok, "people": n}
+
+@app.get("/gallery/export")
+def gallery_export_current():
+    serializable = [
+        {
+            "id": p["id"],
+            "name": p["name"],
+            "relationship": p.get("relationship", ""),
+            "embedding": p["embedding"].tolist(),
+        }
+        for p in people
+    ]
+    return {"people": serializable}
+
 @app.post("/embed")
 async def embed(image: UploadFile = File(...)):
     frame = read_image(image)
@@ -146,6 +206,10 @@ async def embed(image: UploadFile = File(...)):
     emb = l2n(f.normed_embedding.astype("float32"))
     x1,y1,x2,y2 = [int(v) for v in f.bbox]
     return {"ok": True, "embedding": emb.tolist(), "bbox": [x1, y1, x2-x1, y2-y1]}
+
+def read_image(up: UploadFile) -> np.ndarray:
+    data = np.frombuffer(up.file.read(), np.uint8); up.file.seek(0)
+    return cv2.imdecode(data, cv2.IMREAD_COLOR)
 
 @app.post("/enroll")
 async def enroll(
@@ -161,13 +225,12 @@ async def enroll(
         if not r["ok"]:
             return {"ok": False, "reason": "no_face_in_enroll_image"}
         embs.append(np.array(r["embedding"], dtype="float32"))
-    # normalize each, then mean, then normalize centroid
     embs = [l2n(e) for e in embs]
     centroid = l2n(np.mean(np.stack(embs, axis=0), axis=0).astype("float32"))
     pid = f"{name.lower()}_{len(people)}"
     people.append({"id": pid, "name": name, "relationship": relationship, "embedding": centroid})
     rebuild_index()
-    save_people()
+    save_people()  # local fallback copy
     return {"ok": True, "personId": pid}
 
 @app.post("/recognize")
@@ -178,11 +241,9 @@ async def recognize(image: UploadFile = File(...), threshold: float = THRESH):
         assign_tracks([])
         return {"detections": []}
 
-    embs = []
-    bboxes = []
+    embs, bboxes = [], []
     for f in faces:
-        emb = l2n(f.normed_embedding.astype("float32"))
-        embs.append(emb)
+        embs.append(l2n(f.normed_embedding.astype("float32")))
         x1,y1,x2,y2 = [int(v) for v in f.bbox]
         bboxes.append([x1, y1, x2 - x1, y2 - y1])
     embs = np.stack(embs, axis=0).astype("float32")
@@ -191,7 +252,7 @@ async def recognize(image: UploadFile = File(...), threshold: float = THRESH):
     if people:
         if HAS_FAISS and index is not None and index.ntotal > 0:
             sims, ids = index.search(embs, 1)
-            for i in range(len(faces)):
+            for i in range(len(bboxes)):
                 sim = float(sims[i][0]); best = int(ids[i][0])
                 names.append(people[best]["name"] if sim >= threshold else "Unknown")
                 confs.append(sim)
@@ -199,32 +260,18 @@ async def recognize(image: UploadFile = File(...), threshold: float = THRESH):
             gallery = np.stack([p["embedding"] for p in people]).astype("float32")
             sims = embs @ gallery.T
             best_ids = np.argmax(sims, axis=1)
-            best_sims = sims[np.arange(len(faces)), best_ids]
+            best_sims = sims[np.arange(len(bboxes)), best_ids]
             for sim, bid in zip(best_sims, best_ids):
                 sim = float(sim)
                 names.append(people[bid]["name"] if sim >= threshold else "Unknown")
                 confs.append(sim)
     else:
-        names = ["Unknown"] * len(faces)
-        confs = [0.0] * len(faces)
+        names = ["Unknown"] * len(bboxes)
+        confs = [0.0] * len(bboxes)
 
-    dets = [{"bbox": bboxes[i], "name": names[i], "conf": float(confs[i])} for i in range(len(faces))]
+    dets = [{"bbox": bboxes[i], "name": names[i], "conf": float(confs[i])} for i in range(len(bboxes))]
     dets = assign_tracks(dets)
     return {"detections": dets}
-
-@app.get("/health")
-def health():
-    det_size = getattr(fa.models["detector"][1], "input_size", (None, None))
-    return {
-        "ok": True,
-        "people": len(people),
-        "faiss": bool(HAS_FAISS and index is not None and (index.ntotal if people else 0)),
-        "threshold": THRESH,
-        "det_thresh": DET_THRESH,
-        "det_size": det_size,
-    }
-
-load_people()
 
 _last_fast = {"time": 0.0, "payload": None}
 def _now_ms(): return time.time() * 1000.0
@@ -234,9 +281,9 @@ def _clamp(v, lo, hi): return max(lo, min(hi, v))
 async def recognize_fast(
     image: UploadFile = File(...),
     threshold: float = THRESH,
-    # Preferred: full-frame JSON bbox string: "[x,y,w,h]" in POSTED IMAGE space
+    # Preferred: full-frame JSON bbox string: "[x,y,w,h]" (posted image space)
     prev_bbox: str | None = Form(None),
-    # Legacy fallback: send-space fields (if client uses them)
+    # Legacy fallback: send-space fields
     send_w: int | None = Form(None),
     send_h: int | None = Form(None),
     prev_x: float | None = Form(None),
@@ -244,7 +291,6 @@ async def recognize_fast(
     prev_w: float | None = Form(None),
     prev_h: float | None = Form(None),
 ):
-    # throttle cache
     tnow = _now_ms()
     if _last_fast["payload"] is not None and (tnow - _last_fast["time"]) < THROTTLE_MS:
         return _last_fast["payload"]
@@ -252,11 +298,7 @@ async def recognize_fast(
     frame = read_image(image)
     H, W = frame.shape[:2]
 
-    # Resolve ROI (full-frame == posted image space)
     roi_full = None
-    bbox_source = "none"
-
-    # A) full-frame JSON bbox
     if prev_bbox:
         try:
             x, y, w, h = json.loads(prev_bbox)
@@ -265,18 +307,13 @@ async def recognize_fast(
             y1 = _clamp(int(y - m), 0, H - 1)
             x2 = _clamp(int(x + w + m), 0, W - 1)
             y2 = _clamp(int(y + h + m), 0, H - 1)
-            # sanity: avoid tiny/degenerate ROI
             if (x2 - x1) >= 10 and (y2 - y1) >= 10:
                 roi_full = (x1, y1, x2, y2)
-                bbox_source = "prev_bbox"
         except Exception:
             roi_full = None
-
-    # B) legacy send-space → full-frame
-    if roi_full is None and all(v is not None for v in (send_w, send_h, prev_x, prev_y, prev_w, prev_h)):
+    elif all(v is not None for v in (send_w, send_h, prev_x, prev_y, prev_w, prev_h)):
         try:
-            sx = W / float(send_w)
-            sy = H / float(send_h)
+            sx = W / float(send_w); sy = H / float(send_h)
             x = float(prev_x) * sx; y = float(prev_y) * sy
             w = float(prev_w) * sx; h = float(prev_h) * sy
             m = int(ROI_MARGIN * max(w, h))
@@ -286,11 +323,9 @@ async def recognize_fast(
             y2 = _clamp(int(y + h + m), 0, H - 1)
             if (x2 - x1) >= 10 and (y2 - y1) >= 10:
                 roi_full = (x1, y1, x2, y2)
-                bbox_source = "send_space"
         except Exception:
             roi_full = None
 
-    # Detect
     if roi_full:
         x1, y1, x2, y2 = roi_full
         crop = frame[y1:y2, x1:x2]
@@ -301,7 +336,6 @@ async def recognize_fast(
             bx1, by1, bx2, by2 = [int(v) for v in f.bbox]
             bbox = [x1 + bx1, y1 + by1, (bx2 - bx1), (by2 - by1)]
         else:
-            # fallback to full-frame
             faces = fa.get(frame)
             if not faces:
                 payload = {"detections": []}
@@ -322,7 +356,6 @@ async def recognize_fast(
         bx1, by1, bx2, by2 = [int(v) for v in f.bbox]
         bbox = [bx1, by1, (bx2 - bx1), (by2 - by1)]
 
-    # recognition (top-1)
     name, sim = "Unknown", 0.0
     if people:
         if HAS_FAISS and index is not None and index.ntotal > 0:
