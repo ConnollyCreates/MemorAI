@@ -186,6 +186,9 @@ def _sync_gallery_from_firestore_impl(max_photos: int = 3):
         except Exception:
             pass
         names = firestore_service.get_all_people(bypass_cache=True)
+        # Authoritative rebuild: clear local gallery first so deletions are reflected
+        global people
+        people = []
         for name in names:
             pdata = firestore_service.get_person_data(name, bypass_cache=True)
             if not pdata:
@@ -213,9 +216,7 @@ def _sync_gallery_from_firestore_impl(max_photos: int = 3):
                 errors.append({"name": name, "reason": "no_face_in_images"}); continue
             centroid = l2n(np.mean(np.stack(embs, axis=0), axis=0).astype("float32"))
 
-            # replace existing entries with same name
-            global people
-            people = [p for p in people if p["name"] != name]
+            # (people already cleared) append rebuilt centroid entry
             pid = f"{name.lower()}_{len(people)}"
             people.append({"id": pid, "name": name, "relationship": pdata.get("relation", ""), "embedding": centroid})
         rebuild_index(); save_people()

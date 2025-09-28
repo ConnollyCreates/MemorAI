@@ -1,10 +1,12 @@
 {
   "name": "memorai",
   "scripts": {
-    "dev": "concurrently \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\" \"npm run cv\"",
+    "predev": "node scripts/ensure-empty-gallery.js",
+    "dev": "concurrently \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\" \"npm run cv\" \"npm run auto-sync\"",
     "backend": "npm run dev --prefix backend",
     "frontend": "npm run dev --prefix frontend",
-  "cv": "node -e \"const path=require('path'); const root=process.cwd(); const isWin=process.platform==='win32'; const py=isWin?path.join(root,'cv-service','.venv','Scripts','python.exe'):path.join(root,'cv-service','.venv','bin','python'); const {spawnSync}=require('child_process'); const res=spawnSync(py,['-m','uvicorn','app:app','--host','127.0.0.1','--port','8000'],{stdio:'inherit', cwd: path.join(root,'cv-service')}); process.exit(res.status||0);\""
+  "cv": "node -e \"const path=require('path'); const root=process.cwd(); const isWin=process.platform==='win32'; const py=isWin?path.join(root,'cv-service','.venv','Scripts','python.exe'):path.join(root,'cv-service','.venv','bin','python'); const {spawnSync}=require('child_process'); const res=spawnSync(py,['-m','uvicorn','app:app','--host','127.0.0.1','--port','8000'],{stdio:'inherit', cwd: path.join(root,'cv-service')}); process.exit(res.status||0);\"",
+    "auto-sync": "node scripts/wait-and-sync.js"
   },
   "dependencies": {
     "firebase-admin": "^13.5.0"

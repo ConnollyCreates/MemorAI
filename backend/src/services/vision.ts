@@ -20,11 +20,19 @@ function sleep(ms: number) {
  * Retries are added to avoid read-after-write timing issues in Firestore.
  * If expectName is provided, we verify it appears in synced_names before returning.
  */
-export async function syncGalleryFromFirestore(attempts = 3, delayMs = 750, expectName?: string): Promise<SyncResult> {
+export async function syncGalleryFromFirestore(
+    attempts = 3,
+    delayMs = 750,
+    expectName?: string,
+    timeoutMs = 2500
+): Promise<SyncResult> {
     let lastResult: SyncResult = { ok: false };
     for (let i = 0; i < attempts; i++) {
         try {
-            const res = await fetch(`${CV_SERVICE_URL}/sync_gallery_from_firestore`, { method: 'POST' });
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            const res = await fetch(`${CV_SERVICE_URL}/sync_gallery_from_firestore`, { method: 'POST', signal: controller.signal });
+            clearTimeout(timer);
             const status = (res as any).status as number | undefined;
             if (!res.ok) {
                 const text = await res.text();
@@ -46,8 +54,9 @@ export async function syncGalleryFromFirestore(attempts = 3, delayMs = 750, expe
                 console.warn(`[CV sync] '${expectName}' not present yet (attempt ${i + 1}/${attempts}). names=`, names);
             }
         } catch (err) {
-            console.error(`[CV sync] attempt ${i + 1}/${attempts} error:`, err);
-            lastResult = { ok: false, error: err instanceof Error ? err.message : String(err) };
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error(`[CV sync] attempt ${i + 1}/${attempts} error:`, msg);
+            lastResult = { ok: false, error: msg };
         }
         if (i < attempts - 1) {
             await sleep(delayMs);
